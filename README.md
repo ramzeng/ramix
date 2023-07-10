@@ -4,7 +4,7 @@
 
 A lightweight TCP Server framework based on Golang.
 ## Structure
-![image](https://github.com/ranpro/ramix/assets/38133602/c9088f93-1244-4da3-992b-9870af23e3f0)
+![image](https://github.com/ranpro/ramix/assets/38133602/f736a468-094b-4a7c-bf23-9ea956fc063a)
 ## Features
 - [x] Message router
 - [x] Route group
