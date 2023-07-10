@@ -1,6 +1,6 @@
 # Ramix
 ## Introduction
-[English](https://github.com/ranpro/ramix/blob/main/README.md) | [简体中文](https://github.com/ranpro/ramix/blob/main/README-CN.md)
+**English** | [简体中文](https://github.com/ranpro/ramix/blob/main/README-CN.md)
 
 A lightweight TCP Server framework based on Golang.
 ## Structure

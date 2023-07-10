@@ -1,5 +1,7 @@
 # Ramix
 ## 介绍
+**简体中文** | [English](https://github.com/ranpro/ramix/blob/main/README.md)
+
 一款基于 Golang 的轻量级 TCP Server 框架
 ## 结构
 ![image](https://github.com/ranpro/ramix/assets/38133602/39d58327-a0cc-4ccd-ac2e-2f31494af9f0)
