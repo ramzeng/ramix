@@ -1,7 +1,7 @@
 package main
 
 import (
-	"ramix"
+	"github.com/ranpro/ramix"
 	"time"
 )
 

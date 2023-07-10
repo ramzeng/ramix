@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	"github.com/ranpro/ramix"
 	"net"
-	"ramix"
 	"time"
 )
 
