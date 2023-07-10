@@ -2,7 +2,7 @@
 ## 介绍
 一款基于 Golang 的轻量级 TCP Server 框架
 ## 结构
-![image](https://github.com/ranpro/ramix/assets/38133602/1f8cd223-29b8-4934-9936-daeaad54f4f4)
+![image](https://github.com/ranpro/ramix/assets/38133602/39d58327-a0cc-4ccd-ac2e-2f31494af9f0)
 ## 能力
 - [x] 消息路由
 - [x] 路由分组
