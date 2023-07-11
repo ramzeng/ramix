@@ -20,6 +20,7 @@ type Connection struct {
 }
 
 func (c *Connection) open() {
+	c.lastActiveTime = time.Now()
 	go c.reader()
 	go c.writer()
 	go c.heartbeatChecker.start()
@@ -111,5 +112,6 @@ func (c *Connection) SendMessage(event uint32, body []byte) error {
 }
 
 func (c *Connection) isAlive() bool {
+	// fmt.Printf("lastActiveTime: %v, interval: %v, after add: %v, now: %v\n", c.lastActiveTime, c.server.HeartbeatInterval, c.lastActiveTime.Add(c.server.HeartbeatInterval), time.Now())
 	return !c.isClosed && c.lastActiveTime.Add(c.server.HeartbeatTimeout).After(time.Now())
 }
