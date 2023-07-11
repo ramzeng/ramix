@@ -13,9 +13,6 @@ type Context struct {
 }
 
 func (c *Context) Next() {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
 	c.step++
 
 	for ; c.step < len(c.handlers); c.step++ {
