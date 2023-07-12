@@ -10,6 +10,8 @@ type heartbeatChecker struct {
 }
 
 func (h *heartbeatChecker) start() {
+	h.connection.RefreshLastActiveTime()
+
 	ticker := time.NewTicker(h.interval)
 
 	for {
