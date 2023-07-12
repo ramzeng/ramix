@@ -20,7 +20,6 @@ type Connection struct {
 }
 
 func (c *Connection) open() {
-	c.lastActiveTime = time.Now()
 	go c.reader()
 	go c.writer()
 	go c.heartbeatChecker.start()
@@ -57,7 +56,7 @@ func (c *Connection) reader() {
 				return
 			}
 
-			c.lastActiveTime = time.Now()
+			c.RefreshLastActiveTime()
 
 			message, err := c.server.decoder.Decode(buffer, c.server.MaxMessageSize)
 
@@ -109,6 +108,10 @@ func (c *Connection) SendMessage(event uint32, body []byte) error {
 	c.messageChannel <- encodedMessage
 
 	return nil
+}
+
+func (c *Connection) RefreshLastActiveTime() {
+	c.lastActiveTime = time.Now()
 }
 
 func (c *Connection) isAlive() bool {
