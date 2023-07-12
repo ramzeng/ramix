@@ -20,6 +20,7 @@ type Connection struct {
 }
 
 func (c *Connection) open() {
+	c.lastActiveTime = time.Now()
 	go c.reader()
 	go c.writer()
 	go c.heartbeatChecker.start()
