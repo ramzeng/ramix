@@ -88,6 +88,8 @@ func (c *Connection) close() {
 
 	c.heartbeatChecker.stop()
 	c.server.connectionManager.RemoveConnection(c)
+
+	debug("Connection closed: %v", c.socket.RemoteAddr())
 }
 
 func (c *Connection) SendMessage(event uint32, body []byte) error {

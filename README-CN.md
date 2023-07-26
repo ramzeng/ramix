@@ -14,8 +14,8 @@
 - [x] 消息读写分离
 - [x] 连接心跳检测
 - [x] Hooks
+- [x] 日志能力
 ## TODO
-- [ ] 日志能力
 - [ ] 单元测试
 - [ ] WorkerPool
 ## 安装
@@ -46,6 +46,8 @@ func main() {
 		HeartbeatInterval:   5 * time.Second,
 		HeartbeatTimeout:    60 * time.Second,
 	})
+
+	server.Use(ramix.Recovery(), ramix.Logger())
 
 	server.RegisterRoute(0, func(context *ramix.Context) {
 		_ = context.Connection.SendMessage(context.Request.Message.Event, []byte("pong"))

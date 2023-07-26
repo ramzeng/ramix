@@ -6,6 +6,9 @@ import (
 )
 
 func main() {
+	//ramix.SetMode(ramix.ReleaseMode)
+	ramix.SetMode(ramix.DebugMode)
+
 	server := ramix.NewServer(ramix.ServerConfig{
 		Name:                "ramix",
 		IP:                  "0.0.0.0",
@@ -19,6 +22,8 @@ func main() {
 		HeartbeatInterval:   5 * time.Second,
 		HeartbeatTimeout:    60 * time.Second,
 	})
+
+	server.Use(ramix.Recovery(), ramix.Logger())
 
 	server.RegisterRoute(0, func(context *ramix.Context) {
 		_ = context.Connection.SendMessage(context.Request.Message.Event, []byte("pong"))

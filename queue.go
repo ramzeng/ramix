@@ -16,4 +16,6 @@ func (q *queue) start() {
 			}
 		}()
 	}
+
+	debug("Queue started, Workers count: %d", q.workersCount)
 }

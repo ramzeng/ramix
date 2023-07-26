@@ -47,7 +47,7 @@ func (s *Server) listen() {
 	addr, err := net.ResolveTCPAddr(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port))
 
 	if err != nil {
-		fmt.Println("Resolve TCP Address error: ", err)
+		debug("Resolve TCP Address error: %v", err)
 		return
 	}
 
@@ -56,9 +56,11 @@ func (s *Server) listen() {
 	listener, err := net.ListenTCP(s.IPVersion, addr)
 
 	if err != nil {
-		fmt.Println("Listen TCP error: ", err)
+		debug("Listen TCP error: %v", err)
 		return
 	}
+
+	debug("Server started, Listening on: %s:%d", s.IP, s.Port)
 
 	var connectionID uint64
 
@@ -66,12 +68,15 @@ func (s *Server) listen() {
 		socket, err := listener.AcceptTCP()
 
 		if err != nil {
-			fmt.Println("Accept error: ", err)
+			debug("Accept error: %v", err)
 			continue
 		}
 
+		debug("Accept a connection: %v", socket.RemoteAddr())
+
 		if s.connectionManager.ConnectionsCount() >= s.MaxConnectionsCount {
 			_ = socket.Close()
+			debug("Connections count exceeds the limit: %d", s.MaxConnectionsCount)
 			continue
 		}
 
@@ -89,7 +94,7 @@ func (s *Server) monitor() {
 	for {
 		select {
 		case <-time.After(time.Second * 3):
-			fmt.Printf("Server: %s, Connections count: %d\n", s.Name, s.connectionManager.ConnectionsCount())
+			debug("Connections count: %d\n", s.connectionManager.ConnectionsCount())
 		}
 	}
 }
