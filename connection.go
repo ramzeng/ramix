@@ -3,6 +3,7 @@ package ramix
 import (
 	"errors"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,8 @@ type Connection struct {
 
 	server           *Server
 	heartbeatChecker *heartbeatChecker
+
+	lock sync.RWMutex
 }
 
 func (c *Connection) open() {
@@ -70,6 +73,9 @@ func (c *Connection) reader() {
 }
 
 func (c *Connection) close() {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	if c.isClosed {
 		return
 	}
@@ -81,13 +87,12 @@ func (c *Connection) close() {
 	_ = c.socket.Close()
 
 	c.isClosed = true
-	c.quitSignal <- struct{}{}
 
 	close(c.quitSignal)
 	close(c.messageChannel)
 
 	c.heartbeatChecker.stop()
-	c.server.connectionManager.RemoveConnection(c)
+	c.server.connectionManager.removeConnection(c)
 
 	debug("Connection closed: %v", c.socket.RemoteAddr())
 }

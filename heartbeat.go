@@ -26,7 +26,6 @@ func (h *heartbeatChecker) start() {
 }
 
 func (h *heartbeatChecker) stop() {
-	h.quitSignal <- struct{}{}
 	close(h.quitSignal)
 }
 
