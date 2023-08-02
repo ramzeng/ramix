@@ -74,7 +74,7 @@ func (s *Server) listen() {
 
 		debug("Accept a connection: %v", socket.RemoteAddr())
 
-		if s.connectionManager.ConnectionsCount() >= s.MaxConnectionsCount {
+		if s.connectionManager.connectionsCount() >= s.MaxConnectionsCount {
 			_ = socket.Close()
 			debug("Connections count exceeds the limit: %d", s.MaxConnectionsCount)
 			continue
@@ -94,7 +94,7 @@ func (s *Server) monitor() {
 	for {
 		select {
 		case <-time.After(time.Second * 3):
-			debug("Connections count: %d\n", s.connectionManager.ConnectionsCount())
+			debug("Connections count: %d\n", s.connectionManager.connectionsCount())
 		}
 	}
 }
@@ -113,7 +113,7 @@ func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
 		connection.heartbeatChecker = s.heartbeatChecker.clone(connection)
 	}
 
-	s.connectionManager.AddConnection(connection)
+	s.connectionManager.addConnection(connection)
 
 	connection.open()
 }
