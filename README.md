@@ -33,6 +33,9 @@ import (
 )
 
 func main() {
+	//ramix.SetMode(ramix.ReleaseMode)
+	ramix.SetMode(ramix.DebugMode)
+	
 	server := ramix.NewServer(ramix.ServerConfig{
 		Name:                "ramix",
 		IP:                  "0.0.0.0",
