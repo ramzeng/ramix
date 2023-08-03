@@ -17,7 +17,6 @@
 - [x] 日志能力
 ## TODO
 - [ ] 单元测试
-- [ ] WorkerPool
 ## 安装
 ```bash
 go get -u github.com/ranpro/ramix
