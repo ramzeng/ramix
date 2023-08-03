@@ -6,22 +6,8 @@ import (
 	"time"
 )
 
-type ServerConfig struct {
-	Name                string
-	IPVersion           string
-	IP                  string
-	Port                int
-	MaxConnectionsCount int
-	MaxReadBufferSize   uint32
-	MaxMessageSize      uint32
-	MaxTasksCount       uint32
-	WorkersCount        uint32
-	HeartbeatInterval   time.Duration
-	HeartbeatTimeout    time.Duration
-}
-
 type Server struct {
-	ServerConfig
+	ServerOptions
 	routeGroup
 
 	router *router
@@ -150,11 +136,15 @@ func (s *Server) OnConnectionClose(callback func(connection *Connection)) {
 	s.connectionClose = callback
 }
 
-func NewServer(serverConfig ServerConfig) *Server {
+func NewServer(serverOptions ...ServerOption) *Server {
 	server := &Server{
-		ServerConfig: serverConfig,
-		decoder:      &Decoder{},
-		encoder:      &Encoder{},
+		ServerOptions: defaultServerOptions,
+		decoder:       &Decoder{},
+		encoder:       &Encoder{},
+	}
+
+	for _, option := range serverOptions {
+		option(&server.ServerOptions)
 	}
 
 	server.router = &router{
@@ -166,8 +156,8 @@ func NewServer(serverConfig ServerConfig) *Server {
 	}
 
 	server.queue = &queue{
-		contextChannel: make(chan *Context, serverConfig.MaxTasksCount),
-		workersCount:   serverConfig.WorkersCount,
+		contextChannel: make(chan *Context, server.MaxTasksCount),
+		workersCount:   server.WorkersCount,
 	}
 
 	server.connectionManager = &connectionManager{
@@ -175,7 +165,7 @@ func NewServer(serverConfig ServerConfig) *Server {
 	}
 
 	server.heartbeatChecker = &heartbeatChecker{
-		interval: serverConfig.HeartbeatInterval,
+		interval: server.HeartbeatInterval,
 		handler: func(connection *Connection) {
 			if connection.isAlive() {
 				return
