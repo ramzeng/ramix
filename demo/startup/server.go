@@ -2,26 +2,16 @@ package main
 
 import (
 	"github.com/ranpro/ramix"
-	"time"
 )
 
 func main() {
 	//ramix.SetMode(ramix.ReleaseMode)
 	ramix.SetMode(ramix.DebugMode)
 
-	server := ramix.NewServer(ramix.ServerConfig{
-		Name:                "ramix",
-		IP:                  "0.0.0.0",
-		IPVersion:           "tcp4",
-		Port:                8899,
-		MaxConnectionsCount: 3,
-		MaxMessageSize:      1024,
-		MaxReadBufferSize:   1024,
-		WorkersCount:        10,
-		MaxTasksCount:       1024,
-		HeartbeatInterval:   5 * time.Second,
-		HeartbeatTimeout:    60 * time.Second,
-	})
+	server := ramix.NewServer(
+		ramix.WithPort(8899),
+		ramix.WithWorkersCount(100),
+	)
 
 	server.Use(ramix.Recovery(), ramix.Logger())
 
