@@ -17,7 +17,6 @@ A lightweight TCP Server framework based on Golang.
 - [x] Logger
 ## TODO
 - [ ] Unit test
-- [ ] WorkerPool
 ## Installation
 ```bash
 go get -u github.com/ranpro/ramix
