@@ -75,7 +75,7 @@ func (c *Connection) reader() {
 					continue
 				}
 
-				c.server.handleRequest(c, newRequest(message, buffer))
+				c.server.handleRequest(c, newRequest(message))
 			}
 		}
 	}
