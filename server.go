@@ -93,6 +93,10 @@ func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
 		messageChannel: make(chan []byte),
 		quitSignal:     make(chan struct{}),
 		server:         s,
+		frameDecoder: NewFrameDecoder(
+			WithLengthFieldOffset(4),
+			WithLengthFieldLength(4),
+		),
 	}
 
 	if s.heartbeatChecker != nil {
