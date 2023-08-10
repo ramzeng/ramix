@@ -56,6 +56,7 @@ func (c *Connection) reader() {
 			_, err := c.socket.Read(buffer)
 
 			if err != nil {
+				debug("Socket read error: %v", err)
 				return
 			}
 
@@ -64,6 +65,7 @@ func (c *Connection) reader() {
 			message, err := c.server.decoder.Decode(buffer, c.server.MaxMessageSize)
 
 			if err != nil {
+				debug("Message decode error: %v", err)
 				continue
 			}
 
