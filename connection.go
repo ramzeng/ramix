@@ -19,6 +19,8 @@ type Connection struct {
 	server           *Server
 	heartbeatChecker *heartbeatChecker
 
+	frameDecoder *FrameDecoder
+
 	lock sync.RWMutex
 }
 
@@ -53,7 +55,7 @@ func (c *Connection) reader() {
 		default:
 			buffer := make([]byte, c.server.MaxReadBufferSize)
 
-			_, err := c.socket.Read(buffer)
+			length, err := c.socket.Read(buffer)
 
 			if err != nil {
 				debug("Socket read error: %v", err)
@@ -62,14 +64,19 @@ func (c *Connection) reader() {
 
 			c.RefreshLastActiveTime()
 
-			message, err := c.server.decoder.Decode(buffer, c.server.MaxMessageSize)
+			bytesSlices := c.frameDecoder.Decode(buffer[0:length])
 
-			if err != nil {
-				debug("Message decode error: %v", err)
-				continue
+			for _, bytesSlice := range bytesSlices {
+
+				message, err := c.server.decoder.Decode(bytesSlice, c.server.MaxMessageSize)
+
+				if err != nil {
+					debug("Message decode error: %v", err)
+					continue
+				}
+
+				c.server.handleRequest(c, newRequest(message, buffer))
 			}
-
-			c.server.handleRequest(c, newRequest(message, buffer))
 		}
 	}
 }
