@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/ranpro/ramix"
+	"github.com/ramzeng/ramix"
 	"net"
 	"time"
 )

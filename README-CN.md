@@ -1,10 +1,10 @@
 # Ramix
 ## 介绍
-**简体中文** | [English](https://github.com/ranpro/ramix/blob/main/README.md)
+**简体中文** | [English](https://github.com/ramzeng/ramix/blob/main/README.md)
 
 一款基于 Golang 的轻量级 TCP Server 框架
 ## 结构
-![image](https://github.com/ranpro/ramix/assets/38133602/f736a468-094b-4a7c-bf23-9ea956fc063a)
+![image](https://github.com/ramzeng/ramix/assets/38133602/f736a468-094b-4a7c-bf23-9ea956fc063a)
 ## 能力
 - [x] 消息路由
 - [x] 路由分组
@@ -19,7 +19,7 @@
 - [ ] 单元测试
 ## 安装
 ```bash
-go get -u github.com/ranpro/ramix
+go get -u github.com/ramzeng/ramix
 ```
 ## 快速开始
 ### 服务端
@@ -27,7 +27,7 @@ go get -u github.com/ranpro/ramix
 package main
 
 import (
-	"github.com/ranpro/ramix"
+	"github.com/ramzeng/ramix"
 	"time"
 )
 
@@ -55,7 +55,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/ranpro/ramix"
+	"github.com/ramzeng/ramix"
 	"net"
 	"time"
 )
