@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/ranpro/ramix"
+	"github.com/ramzeng/ramix"
 )
 
 func main() {

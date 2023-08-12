@@ -1,10 +1,10 @@
 # Ramix
 ## Introduction
-**English** | [简体中文](https://github.com/ranpro/ramix/blob/main/README-CN.md)
+**English** | [简体中文](https://github.com/ramzeng/ramix/blob/main/README-CN.md)
 
 A lightweight TCP Server framework based on Golang.
 ## Structure
-![image](https://github.com/ranpro/ramix/assets/38133602/f736a468-094b-4a7c-bf23-9ea956fc063a)
+![image](https://github.com/ramzeng/ramix/assets/38133602/f736a468-094b-4a7c-bf23-9ea956fc063a)
 ## Features
 - [x] Message router
 - [x] Route group
@@ -19,7 +19,7 @@ A lightweight TCP Server framework based on Golang.
 - [ ] Unit test
 ## Installation
 ```bash
-go get -u github.com/ranpro/ramix
+go get -u github.com/ramzeng/ramix
 ```
 ## Quick Start
 ### Server side
@@ -27,7 +27,7 @@ go get -u github.com/ranpro/ramix
 package main
 
 import (
-	"github.com/ranpro/ramix"
+	"github.com/ramzeng/ramix"
 	"time"
 )
 
@@ -55,7 +55,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/ranpro/ramix"
+	"github.com/ramzeng/ramix"
 	"net"
 	"time"
 )

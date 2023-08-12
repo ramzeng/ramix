@@ -1,3 +1,3 @@
-module github.com/ranpro/ramix
+module github.com/ramzeng/ramix
 
 go 1.19
