@@ -1,12 +1,16 @@
 package ramix
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type heartbeatChecker struct {
 	connection *Connection
 	interval   time.Duration
 	handler    func(connection *Connection)
-	quitSignal chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 func (h *heartbeatChecker) start() {
@@ -16,8 +20,9 @@ func (h *heartbeatChecker) start() {
 
 	for {
 		select {
-		case <-h.quitSignal:
+		case <-h.ctx.Done():
 			ticker.Stop()
+			debug("Connection %d heartbeat checker stopped", h.connection.ID)
 			return
 		case <-ticker.C:
 			h.handler(h.connection)
@@ -26,14 +31,18 @@ func (h *heartbeatChecker) start() {
 }
 
 func (h *heartbeatChecker) stop() {
-	close(h.quitSignal)
+	h.cancel()
 }
 
 func (h *heartbeatChecker) clone(connection *Connection) *heartbeatChecker {
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+
 	return &heartbeatChecker{
 		connection: connection,
 		interval:   h.interval,
 		handler:    h.handler,
-		quitSignal: make(chan struct{}),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
