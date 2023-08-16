@@ -114,26 +114,26 @@ func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
 }
 
 func (s *Server) handleRequest(connection *Connection, request *Request) {
-	context := &Context{
+	ctx := &Context{
 		Connection: connection,
 		Request:    request,
 		step:       -1,
 	}
 
-	if handlers, ok := s.router.routes[context.Request.Message.Event]; ok {
-		context.handlers = append(context.handlers, handlers...)
+	if handlers, ok := s.router.routes[ctx.Request.Message.Event]; ok {
+		ctx.handlers = append(ctx.handlers, handlers...)
 	} else {
-		context.handlers = append(context.handlers, func(context *Context) {
+		ctx.handlers = append(ctx.handlers, func(context *Context) {
 			_ = context.Connection.SendMessage(404, []byte("Event Not Found"))
 		})
 	}
 
 	if s.queue.workersCount > 0 {
-		s.queue.contextChannel <- context
+		s.queue.contextChannel <- ctx
 	} else {
 		go func(context *Context) {
 			context.Next()
-		}(context)
+		}(ctx)
 	}
 }
 
