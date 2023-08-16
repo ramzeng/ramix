@@ -1,6 +1,7 @@
 package ramix
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -86,12 +87,16 @@ func (s *Server) monitor() {
 }
 
 func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+
 	connection := &Connection{
 		ID:             connectionID,
 		socket:         socket,
 		isClosed:       false,
+		ctx:            ctx,
+		cancel:         cancel,
 		messageChannel: make(chan []byte),
-		quitSignal:     make(chan struct{}),
 		server:         s,
 		frameDecoder: NewFrameDecoder(
 			WithLengthFieldOffset(4),
@@ -177,7 +182,6 @@ func NewServer(serverOptions ...ServerOption) *Server {
 
 			connection.close()
 		},
-		quitSignal: make(chan struct{}),
 	}
 
 	return server

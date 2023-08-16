@@ -1,6 +1,7 @@
 package ramix
 
 import (
+	"context"
 	"errors"
 	"net"
 	"sync"
@@ -12,7 +13,8 @@ type Connection struct {
 
 	socket         *net.TCPConn
 	isClosed       bool
-	quitSignal     chan struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
 	messageChannel chan []byte
 	lastActiveTime time.Time
 
@@ -37,7 +39,8 @@ func (c *Connection) open() {
 func (c *Connection) writer() {
 	for {
 		select {
-		case <-c.quitSignal:
+		case <-c.ctx.Done():
+			debug("Connection %d writer stopped", c.ID)
 			return
 		case data := <-c.messageChannel:
 			_, _ = c.socket.Write(data)
@@ -50,7 +53,8 @@ func (c *Connection) reader() {
 
 	for {
 		select {
-		case <-c.quitSignal:
+		case <-c.ctx.Done():
+			debug("Connection %d reader stopped", c.ID)
 			return
 		default:
 			buffer := make([]byte, c.server.MaxReadBufferSize)
@@ -97,13 +101,13 @@ func (c *Connection) close() {
 
 	c.isClosed = true
 
-	close(c.quitSignal)
+	c.cancel()
 	close(c.messageChannel)
 
 	c.heartbeatChecker.stop()
 	c.server.connectionManager.removeConnection(c)
 
-	debug("Connection closed: %v", c.socket.RemoteAddr())
+	debug("Connection %d closed, remote address: %v", c.ID, c.socket.RemoteAddr())
 }
 
 func (c *Connection) SendMessage(event uint32, body []byte) error {
