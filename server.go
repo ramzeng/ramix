@@ -41,8 +41,7 @@ func (s *Server) listen() {
 	addr, err := net.ResolveTCPAddr(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port))
 
 	if err != nil {
-		debug("Resolve TCP Address error: %v", err)
-		return
+		panic(fmt.Sprintf("Resolve TCP Address error: %v", err))
 	}
 
 	s.queue.start()
@@ -50,8 +49,7 @@ func (s *Server) listen() {
 	listener, err := net.ListenTCP(s.IPVersion, addr)
 
 	if err != nil {
-		debug("Listen TCP error: %v", err)
-		return
+		panic(fmt.Sprintf("Listen TCP error: %v", err))
 	}
 
 	debug("Server started, Listening on: %s:%d", s.IP, s.Port)
