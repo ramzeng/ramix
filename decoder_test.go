@@ -9,7 +9,7 @@ func TestDefaultDecoder_Decode(t *testing.T) {
 
 	decoder := Decoder{}
 
-	message, err := decoder.Decode(packed, 1024)
+	message, err := decoder.Decode(packed)
 
 	if err != nil {
 		t.Error(err)
