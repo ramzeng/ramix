@@ -35,14 +35,13 @@ func (h *heartbeatChecker) stop() {
 }
 
 func (h *heartbeatChecker) clone(connection *Connection) *heartbeatChecker {
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-
-	return &heartbeatChecker{
+	checker := &heartbeatChecker{
 		connection: connection,
 		interval:   h.interval,
 		handler:    h.handler,
-		ctx:        ctx,
-		cancel:     cancel,
 	}
+
+	checker.ctx, checker.cancel = context.WithCancel(context.Background())
+
+	return checker
 }
