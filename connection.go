@@ -49,7 +49,7 @@ func (c *Connection) writer() {
 }
 
 func (c *Connection) reader() {
-	defer c.close()
+	defer c.close(true)
 
 	for {
 		select {
@@ -85,7 +85,7 @@ func (c *Connection) reader() {
 	}
 }
 
-func (c *Connection) close() {
+func (c *Connection) close(syncManager bool) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -105,7 +105,10 @@ func (c *Connection) close() {
 	close(c.messageChannel)
 
 	c.heartbeatChecker.stop()
-	c.server.connectionManager.removeConnection(c)
+
+	if syncManager {
+		c.server.connectionManager.removeConnection(c)
+	}
 
 	debug("Connection %d closed, remote address: %v", c.ID, c.socket.RemoteAddr())
 }

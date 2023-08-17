@@ -27,6 +27,10 @@ func (cm *connectionManager) clearConnections() {
 	cm.lock.Lock()
 	defer cm.lock.Unlock()
 
+	for _, connection := range cm.connections {
+		connection.close(false)
+	}
+
 	cm.connections = make(map[uint64]*Connection)
 }
 
@@ -40,5 +44,6 @@ func (cm *connectionManager) connection(id uint64) *Connection {
 func (cm *connectionManager) connectionsCount() int {
 	cm.lock.RLock()
 	defer cm.lock.RUnlock()
+
 	return len(cm.connections)
 }

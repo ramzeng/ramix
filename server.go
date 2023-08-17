@@ -4,12 +4,18 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
 type Server struct {
 	ServerOptions
 	routeGroup
+
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	router *router
 	queue  *queue
@@ -27,7 +33,8 @@ type Server struct {
 func (s *Server) Serve() {
 	go s.listen()
 	go s.monitor()
-	select {}
+
+	<-s.stop()
 }
 
 func (s *Server) listen() {
@@ -52,34 +59,67 @@ func (s *Server) listen() {
 	var connectionID uint64
 
 	for {
-		socket, err := listener.AcceptTCP()
+		select {
+		case <-s.ctx.Done():
+			debug("Server listener stopped")
+			return
+		default:
+			socket, err := listener.AcceptTCP()
 
-		if err != nil {
-			debug("Accept error: %v", err)
-			continue
+			if err != nil {
+				debug("Accept error: %v", err)
+				continue
+			}
+
+			debug("Accept a connection: %v", socket.RemoteAddr())
+
+			if s.connectionManager.connectionsCount() >= s.MaxConnectionsCount {
+				_ = socket.Close()
+				debug("Connections count exceeds the limit: %d", s.MaxConnectionsCount)
+				continue
+			}
+
+			go s.OpenConnection(socket, connectionID)
+
+			connectionID++
 		}
-
-		debug("Accept a connection: %v", socket.RemoteAddr())
-
-		if s.connectionManager.connectionsCount() >= s.MaxConnectionsCount {
-			_ = socket.Close()
-			debug("Connections count exceeds the limit: %d", s.MaxConnectionsCount)
-			continue
-		}
-
-		go s.OpenConnection(socket, connectionID)
-
-		connectionID++
 	}
 }
 
-func (s *Server) Stop() {
+func (s *Server) stop() <-chan struct{} {
+	done := make(chan struct{})
+	signals := make(chan os.Signal, 2)
 
+	signal.Notify(signals, syscall.SIGQUIT, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-signals
+
+		go func() {
+			debug("Server stopping...")
+
+			s.cancel()
+			s.connectionManager.clearConnections()
+
+			debug("Server stopped")
+
+			done <- struct{}{}
+		}()
+
+		<-signals
+		debug("Server force stopping...")
+		os.Exit(128 + int(sig.(syscall.Signal)))
+	}()
+
+	return done
 }
 
 func (s *Server) monitor() {
 	for {
 		select {
+		case <-s.ctx.Done():
+			debug("Server monitor stopped")
+			return
 		case <-time.After(time.Second * 3):
 			debug("Connections count: %d\n", s.connectionManager.connectionsCount())
 		}
@@ -87,15 +127,10 @@ func (s *Server) monitor() {
 }
 
 func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-
 	connection := &Connection{
 		ID:             connectionID,
 		socket:         socket,
 		isClosed:       false,
-		ctx:            ctx,
-		cancel:         cancel,
 		messageChannel: make(chan []byte),
 		server:         s,
 		frameDecoder: NewFrameDecoder(
@@ -103,6 +138,8 @@ func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
 			WithLengthFieldLength(4),
 		),
 	}
+
+	connection.ctx, connection.cancel = context.WithCancel(context.Background())
 
 	if s.heartbeatChecker != nil {
 		connection.heartbeatChecker = s.heartbeatChecker.clone(connection)
@@ -156,6 +193,8 @@ func NewServer(serverOptions ...ServerOption) *Server {
 		option(&server.ServerOptions)
 	}
 
+	server.ctx, server.cancel = context.WithCancel(context.Background())
+
 	server.router = &router{
 		routes: make(map[uint32][]HandlerInterface),
 	}
@@ -167,6 +206,7 @@ func NewServer(serverOptions ...ServerOption) *Server {
 	server.queue = &queue{
 		contextChannel: make(chan *Context, server.MaxTasksCount),
 		workersCount:   server.WorkersCount,
+		ctx:            server.ctx,
 	}
 
 	server.connectionManager = &connectionManager{
@@ -180,7 +220,7 @@ func NewServer(serverOptions ...ServerOption) *Server {
 				return
 			}
 
-			connection.close()
+			connection.close(true)
 		},
 	}
 
