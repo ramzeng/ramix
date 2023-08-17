@@ -99,6 +99,8 @@ func (s *Server) stop() <-chan struct{} {
 			debug("Server stopping...")
 
 			s.cancel()
+
+			s.queue.close()
 			s.connectionManager.clearConnections()
 
 			debug("Server stopped")
