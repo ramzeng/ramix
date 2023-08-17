@@ -8,7 +8,6 @@ var defaultServerOptions = ServerOptions{
 	IPVersion:           "tcp4",
 	Port:                8899,
 	MaxConnectionsCount: 3,
-	MaxMessageSize:      1024,
 	MaxReadBufferSize:   1024,
 	WorkersCount:        10,
 	MaxTasksCount:       1024,
@@ -23,7 +22,6 @@ type ServerOptions struct {
 	Port                int
 	MaxConnectionsCount int
 	MaxReadBufferSize   uint32
-	MaxMessageSize      uint32
 	MaxTasksCount       uint32
 	WorkersCount        uint32
 	HeartbeatInterval   time.Duration
@@ -65,12 +63,6 @@ func WithMaxConnectionsCount(maxConnectionsCount int) ServerOption {
 func WithMaxReadBufferSize(maxReadBufferSize uint32) ServerOption {
 	return func(o *ServerOptions) {
 		o.MaxReadBufferSize = maxReadBufferSize
-	}
-}
-
-func WithMaxMessageSize(maxMessageSize uint32) ServerOption {
-	return func(o *ServerOptions) {
-		o.MaxMessageSize = maxMessageSize
 	}
 }
 

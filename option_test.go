@@ -59,15 +59,6 @@ func TestWithMaxReadBufferSize(t *testing.T) {
 	}
 }
 
-func TestWithMaxMessageSize(t *testing.T) {
-	serverOptions := defaultServerOptions
-	serverOption := WithMaxMessageSize(2048)
-	serverOption(&serverOptions)
-	if serverOptions.MaxMessageSize != 2048 {
-		t.Error("serverOptions.MaxMessageSize should be 2048")
-	}
-}
-
 func TestWithMaxTasksCount(t *testing.T) {
 	serverOptions := defaultServerOptions
 	serverOption := WithMaxTasksCount(2048)

@@ -32,7 +32,6 @@ import (
 )
 
 func main() {
-	//ramix.SetMode(ramix.ReleaseMode)
 	ramix.SetMode(ramix.DebugMode)
 
 	server := ramix.NewServer(
@@ -102,7 +101,7 @@ func main() {
 			return
 		}
 
-		message, err = decoder.Decode(buffer, 1024)
+		message, err = decoder.Decode(buffer)
 
 		if err != nil {
 			fmt.Println("Decode error: ", err)

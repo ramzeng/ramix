@@ -72,7 +72,7 @@ func (c *Connection) reader() {
 
 			for _, bytesSlice := range bytesSlices {
 
-				message, err := c.server.decoder.Decode(bytesSlice, c.server.MaxMessageSize)
+				message, err := c.server.decoder.Decode(bytesSlice)
 
 				if err != nil {
 					debug("Message decode error: %v", err)

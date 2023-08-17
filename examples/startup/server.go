@@ -5,7 +5,6 @@ import (
 )
 
 func main() {
-	//ramix.SetMode(ramix.ReleaseMode)
 	ramix.SetMode(ramix.DebugMode)
 
 	server := ramix.NewServer(
