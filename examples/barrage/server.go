@@ -7,7 +7,6 @@ import (
 var connections = make(map[uint64]*ramix.Connection)
 
 func main() {
-	//ramix.SetMode(ramix.ReleaseMode)
 	ramix.SetMode(ramix.DebugMode)
 
 	server := ramix.NewServer(
