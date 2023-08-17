@@ -91,7 +91,6 @@ type FrameDecoder struct {
 	discardingTooLongFrame bool
 	tooLongFrameLength     int64
 	bytesToDiscard         int64
-	frameLengthInt         int64
 	bytes                  []byte
 	lock                   sync.Mutex
 }
