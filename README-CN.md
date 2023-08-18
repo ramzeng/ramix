@@ -1,4 +1,7 @@
 # Ramix
+[![Go Reference](https://pkg.go.dev/badge/github.com/ramzeng/ramix.svg)](https://pkg.go.dev/github.com/ramzeng/ramix)
+![Lint](https://github.com/ramzeng/ramix/actions/workflows/golangci-lint.yml/badge.svg)
+
 ## 介绍
 **简体中文** | [English](https://github.com/ramzeng/ramix/blob/main/README.md)
 
