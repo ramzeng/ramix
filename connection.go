@@ -19,6 +19,7 @@ type Connection struct {
 	lastActiveTime time.Time
 
 	server           *Server
+	worker           *worker
 	heartbeatChecker *heartbeatChecker
 
 	frameDecoder *FrameDecoder

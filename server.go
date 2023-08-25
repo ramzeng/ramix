@@ -17,8 +17,8 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	router *router
-	queue  *queue
+	router  *router
+	workers []*worker
 
 	decoder DecoderInterface
 	encoder EncoderInterface
@@ -44,7 +44,7 @@ func (s *Server) listen() {
 		panic(fmt.Sprintf("Resolve TCP Address error: %v", err))
 	}
 
-	s.queue.start()
+	s.startWorkers()
 
 	listener, err := net.ListenTCP(s.IPVersion, addr)
 
@@ -77,7 +77,7 @@ func (s *Server) listen() {
 				continue
 			}
 
-			go s.OpenConnection(socket, connectionID)
+			go s.openConnection(socket, connectionID)
 
 			connectionID++
 		}
@@ -98,7 +98,7 @@ func (s *Server) stop() <-chan struct{} {
 
 			s.cancel()
 
-			s.queue.close()
+			s.stopWorkers()
 			s.connectionManager.clearConnections()
 
 			debug("Server stopped")
@@ -126,13 +126,34 @@ func (s *Server) monitor() {
 	}
 }
 
-func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
+func (s *Server) startWorkers() {
+	s.workers = make([]*worker, s.WorkersCount)
+
+	for i := 0; i < int(s.WorkersCount); i++ {
+		s.workers[i] = &worker{
+			id:    i,
+			tasks: make(chan *Context, s.MaxTasksCount),
+			ctx:   s.ctx,
+		}
+
+		s.workers[i].start()
+	}
+}
+
+func (s *Server) stopWorkers() {
+	for _, worker := range s.workers {
+		worker.stop()
+	}
+}
+
+func (s *Server) openConnection(socket *net.TCPConn, connectionID uint64) {
 	connection := &Connection{
 		ID:             connectionID,
 		socket:         socket,
 		isClosed:       false,
 		messageChannel: make(chan []byte),
 		server:         s,
+		worker:         s.workers[connectionID%uint64(s.WorkersCount)],
 		frameDecoder: NewFrameDecoder(
 			WithLengthFieldOffset(4),
 			WithLengthFieldLength(4),
@@ -148,6 +169,8 @@ func (s *Server) OpenConnection(socket *net.TCPConn, connectionID uint64) {
 	s.connectionManager.addConnection(connection)
 
 	connection.open()
+
+	debug("Connection %d opened, worker %d assigned", connection.ID, connection.worker.id)
 }
 
 func (s *Server) handleRequest(connection *Connection, request *Request) {
@@ -165,8 +188,8 @@ func (s *Server) handleRequest(connection *Connection, request *Request) {
 		})
 	}
 
-	if s.queue.workersCount > 0 {
-		s.queue.contextChannel <- ctx
+	if s.WorkersCount > 0 {
+		connection.worker.tasks <- ctx
 	} else {
 		go func(context *Context) {
 			context.Next()
@@ -201,12 +224,6 @@ func NewServer(serverOptions ...ServerOption) *Server {
 
 	server.routeGroup = routeGroup{
 		router: server.router,
-	}
-
-	server.queue = &queue{
-		contextChannel: make(chan *Context, server.MaxTasksCount),
-		workersCount:   server.WorkersCount,
-		ctx:            server.ctx,
 	}
 
 	server.connectionManager = &connectionManager{

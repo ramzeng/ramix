@@ -7,7 +7,7 @@ var defaultServerOptions = ServerOptions{
 	IP:                  "0.0.0.0",
 	IPVersion:           "tcp4",
 	Port:                8899,
-	MaxConnectionsCount: 3,
+	MaxConnectionsCount: 1024,
 	MaxReadBufferSize:   1024,
 	WorkersCount:        10,
 	MaxTasksCount:       1024,
