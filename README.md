@@ -18,6 +18,7 @@ A lightweight TCP Server framework based on Golang.
 - [x] Connection heartbeat detection
 - [x] Hooks
 - [x] Logger
+- [x] TLS Support
 ## TODO
 - [ ] Unit test
 ## Installation
