@@ -11,7 +11,7 @@ import (
 type Connection struct {
 	ID uint64
 
-	socket         *net.TCPConn
+	socket         net.Conn
 	isClosed       bool
 	ctx            context.Context
 	cancel         context.CancelFunc
