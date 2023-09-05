@@ -2,6 +2,7 @@ package ramix
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"os"
@@ -38,18 +39,34 @@ func (s *Server) Serve() {
 }
 
 func (s *Server) listen() {
-	addr, err := net.ResolveTCPAddr(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port))
-
-	if err != nil {
-		panic(fmt.Sprintf("Resolve TCP Address error: %v", err))
-	}
-
 	s.startWorkers()
 
-	listener, err := net.ListenTCP(s.IPVersion, addr)
+	var listener net.Listener
 
-	if err != nil {
-		panic(fmt.Sprintf("Listen TCP error: %v", err))
+	if s.CertFile != "" && s.PrivateKeyFile != "" {
+		certificate, err := tls.LoadX509KeyPair(s.CertFile, s.PrivateKeyFile)
+
+		if err != nil {
+			panic(fmt.Sprintf("Load X509 key pair error: %v", err))
+		}
+
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{certificate},
+		}
+
+		listener, err = tls.Listen(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port), tlsConfig)
+
+		if err != nil {
+			panic(fmt.Sprintf("Listen TLS error: %v", err))
+		}
+	} else {
+		var err error
+
+		listener, err = net.Listen(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port))
+
+		if err != nil {
+			panic(fmt.Sprintf("Listen TCP error: %v", err))
+		}
 	}
 
 	debug("Server started, Listening on: %s:%d", s.IP, s.Port)
@@ -62,7 +79,7 @@ func (s *Server) listen() {
 			debug("Server listener stopped")
 			return
 		default:
-			socket, err := listener.AcceptTCP()
+			socket, err := listener.Accept()
 
 			if err != nil {
 				debug("Accept error: %v", err)
@@ -146,7 +163,7 @@ func (s *Server) stopWorkers() {
 	}
 }
 
-func (s *Server) openConnection(socket *net.TCPConn, connectionID uint64) {
+func (s *Server) openConnection(socket net.Conn, connectionID uint64) {
 	connection := &Connection{
 		ID:             connectionID,
 		socket:         socket,

@@ -20,6 +20,8 @@ type ServerOptions struct {
 	IPVersion           string
 	IP                  string
 	Port                int
+	CertFile            string
+	PrivateKeyFile      string
 	MaxConnectionsCount int
 	MaxReadBufferSize   uint32
 	MaxTasksCount       uint32
@@ -51,6 +53,18 @@ func WithIP(ip string) ServerOption {
 func WithPort(port int) ServerOption {
 	return func(o *ServerOptions) {
 		o.Port = port
+	}
+}
+
+func WithCertFile(certFile string) ServerOption {
+	return func(o *ServerOptions) {
+		o.CertFile = certFile
+	}
+}
+
+func WithPrivateKeyFile(privateKeyFile string) ServerOption {
+	return func(o *ServerOptions) {
+		o.PrivateKeyFile = privateKeyFile
 	}
 }
 
