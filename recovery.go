@@ -23,7 +23,7 @@ func trace(message string) string {
 	return str.String()
 }
 
-func Recovery() HandlerInterface {
+func Recovery() Handler {
 	return func(context *Context) {
 		defer func() {
 			if err := recover(); err != nil {

@@ -13,7 +13,7 @@ import (
 
 type Server struct {
 	ServerOptions
-	routeGroup
+	*routeGroup
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -235,28 +235,10 @@ func NewServer(serverOptions ...ServerOption) *Server {
 
 	server.ctx, server.cancel = context.WithCancel(context.Background())
 
-	server.router = &router{
-		routes: make(map[uint32][]HandlerInterface),
-	}
-
-	server.routeGroup = routeGroup{
-		router: server.router,
-	}
-
-	server.connectionManager = &connectionManager{
-		connections: make(map[uint64]*Connection),
-	}
-
-	server.heartbeatChecker = &heartbeatChecker{
-		interval: server.HeartbeatInterval,
-		handler: func(connection *Connection) {
-			if connection.isAlive() {
-				return
-			}
-
-			connection.close(true)
-		},
-	}
+	server.router = newRouter()
+	server.routeGroup = newGroup(server.router)
+	server.connectionManager = newConnectionManager(server.ConnectionGroupsCount)
+	server.heartbeatChecker = newHeartbeatChecker(server.HeartbeatInterval, nil)
 
 	return server
 }

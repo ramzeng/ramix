@@ -5,6 +5,23 @@ import (
 	"time"
 )
 
+func newHeartbeatChecker(interval time.Duration, handler func(connection *Connection)) *heartbeatChecker {
+	if handler == nil {
+		handler = func(connection *Connection) {
+			if connection.isAlive() {
+				return
+			}
+
+			connection.close(true)
+		}
+	}
+
+	return &heartbeatChecker{
+		interval: interval,
+		handler:  handler,
+	}
+}
+
 type heartbeatChecker struct {
 	connection *Connection
 	interval   time.Duration
