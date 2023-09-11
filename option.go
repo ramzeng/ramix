@@ -3,31 +3,33 @@ package ramix
 import "time"
 
 var defaultServerOptions = ServerOptions{
-	Name:                "ramix",
-	IP:                  "0.0.0.0",
-	IPVersion:           "tcp4",
-	Port:                8899,
-	MaxConnectionsCount: 1024,
-	MaxReadBufferSize:   1024,
-	WorkersCount:        10,
-	MaxTasksCount:       1024,
-	HeartbeatInterval:   5 * time.Second,
-	HeartbeatTimeout:    60 * time.Second,
+	Name:                  "ramix",
+	IP:                    "0.0.0.0",
+	IPVersion:             "tcp4",
+	Port:                  8899,
+	MaxConnectionsCount:   1024,
+	ConnectionGroupsCount: 10,
+	MaxReadBufferSize:     1024,
+	WorkersCount:          10,
+	MaxTasksCount:         1024,
+	HeartbeatInterval:     5 * time.Second,
+	HeartbeatTimeout:      60 * time.Second,
 }
 
 type ServerOptions struct {
-	Name                string
-	IPVersion           string
-	IP                  string
-	Port                int
-	CertFile            string
-	PrivateKeyFile      string
-	MaxConnectionsCount int
-	MaxReadBufferSize   uint32
-	MaxTasksCount       uint32
-	WorkersCount        uint32
-	HeartbeatInterval   time.Duration
-	HeartbeatTimeout    time.Duration
+	Name                  string
+	IPVersion             string
+	IP                    string
+	Port                  int
+	CertFile              string
+	PrivateKeyFile        string
+	MaxConnectionsCount   int
+	ConnectionGroupsCount int
+	MaxReadBufferSize     uint32
+	MaxTasksCount         uint32
+	WorkersCount          uint32
+	HeartbeatInterval     time.Duration
+	HeartbeatTimeout      time.Duration
 }
 
 type ServerOption func(*ServerOptions)
@@ -71,6 +73,12 @@ func WithPrivateKeyFile(privateKeyFile string) ServerOption {
 func WithMaxConnectionsCount(maxConnectionsCount int) ServerOption {
 	return func(o *ServerOptions) {
 		o.MaxConnectionsCount = maxConnectionsCount
+	}
+}
+
+func WithConnectionGroupsCount(connectionGroupsCount int) ServerOption {
+	return func(o *ServerOptions) {
+		o.ConnectionGroupsCount = connectionGroupsCount
 	}
 }
 

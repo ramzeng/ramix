@@ -39,26 +39,26 @@ type LogFormatterParameters struct {
 }
 
 // Logger instances a Logger middleware that will write the logs to DefaultWriter.
-func Logger() HandlerInterface {
+func Logger() Handler {
 	return LoggerWithConfig(LoggerConfig{})
 }
 
 // LoggerWithFormatter instance a Logger middleware with the specified log format function.
-func LoggerWithFormatter(formatter LogFormatter) HandlerInterface {
+func LoggerWithFormatter(formatter LogFormatter) Handler {
 	return LoggerWithConfig(LoggerConfig{
 		Formatter: formatter,
 	})
 }
 
 // LoggerWithWriter instance a Logger middleware with the specified writer buffer.
-func LoggerWithWriter(writer io.Writer) HandlerInterface {
+func LoggerWithWriter(writer io.Writer) Handler {
 	return LoggerWithConfig(LoggerConfig{
 		Writer: writer,
 	})
 }
 
 // LoggerWithConfig instance a Logger middleware with config.
-func LoggerWithConfig(config LoggerConfig) HandlerInterface {
+func LoggerWithConfig(config LoggerConfig) Handler {
 	formatter := config.Formatter
 
 	if formatter == nil {

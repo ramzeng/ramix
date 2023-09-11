@@ -86,7 +86,7 @@ func (c *Connection) reader() {
 	}
 }
 
-func (c *Connection) close(syncManager bool) {
+func (c *Connection) close(syncConnectionManager bool) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -107,7 +107,7 @@ func (c *Connection) close(syncManager bool) {
 
 	c.heartbeatChecker.stop()
 
-	if syncManager {
+	if syncConnectionManager {
 		c.server.connectionManager.removeConnection(c)
 	}
 

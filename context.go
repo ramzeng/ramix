@@ -6,7 +6,7 @@ type Context struct {
 	Connection *Connection
 	Request    *Request
 
-	handlers []HandlerInterface
+	handlers []Handler
 	step     int
 	keys     map[string]any
 	lock     sync.RWMutex
