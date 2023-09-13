@@ -14,7 +14,7 @@ var defaultLogFormatter = func(parameters LogFormatterParameters) string {
 
 	return fmt.Sprintf("[ramix] %v | %14v | %10v | %d | %d byte \n",
 		parameters.TimeStamp.Format("2006/01/02 15:04:05"),
-		parameters.Connection.RemoteAddr(),
+		parameters.Connection.RemoteAddress(),
 		parameters.Latency,
 		parameters.Request.Message.Event,
 		parameters.Request.Message.BodySize,

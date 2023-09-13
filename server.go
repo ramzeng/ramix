@@ -34,8 +34,16 @@ type Server struct {
 func (s *Server) Serve() {
 	s.startWorkers()
 
-	go s.listenTCP()
-	go s.listenWebSocket()
+	switch {
+	case s.OnlyTCP:
+		go s.listenTCP()
+	case s.OnlyWebSocket:
+		go s.listenWebSocket()
+	default:
+		go s.listenTCP()
+		go s.listenWebSocket()
+	}
+
 	go s.monitor()
 
 	<-s.stop()
@@ -43,16 +51,14 @@ func (s *Server) Serve() {
 
 func (s *Server) listenWebSocket() {
 	if s.WebSocketPath == "" {
-		return
+		panic("WebSocket path is empty")
 	}
-
-	debug("WebSocket server started, Listening on: %s:%d%s", s.IP, s.WebSocketPort, s.WebSocketPath)
 
 	http.HandleFunc(s.WebSocketPath, func(writer http.ResponseWriter, request *http.Request) {
 		socket, err := s.upgrader.Upgrade(writer, request, nil)
 
 		if err != nil {
-			debug("Upgrade error: %v", err)
+			debug("WebSocket upgrade error: %v", err)
 			return
 		}
 
@@ -61,13 +67,23 @@ func (s *Server) listenWebSocket() {
 		go s.openWebSocketConnection(socket, s.connectionID)
 	})
 
-	if err := http.ListenAndServe(fmt.Sprintf("%s:%d", s.IP, s.WebSocketPort), nil); err != nil {
-		panic(fmt.Sprintf("Listen and serve error: %v", err))
+	debug("WebSocket server is starting on %s:%d", s.IP, s.WebSocketPort)
+
+	if s.CertFile != "" && s.PrivateKeyFile != "" {
+		if err := http.ListenAndServeTLS(fmt.Sprintf("%s:%d", s.IP, s.WebSocketPort), s.CertFile, s.PrivateKeyFile, nil); err != nil {
+			panic(fmt.Sprintf("Listen and serve TLS error: %v", err))
+		}
+	} else {
+		if err := http.ListenAndServe(fmt.Sprintf("%s:%d", s.IP, s.WebSocketPort), nil); err != nil {
+			panic(fmt.Sprintf("Listen and serve error: %v", err))
+		}
 	}
 }
 
 func (s *Server) listenTCP() {
 	var listener net.Listener
+
+	debug("TCP server is starting on %s:%d", s.IP, s.Port)
 
 	if s.CertFile != "" && s.PrivateKeyFile != "" {
 		certificate, err := tls.LoadX509KeyPair(s.CertFile, s.PrivateKeyFile)
@@ -94,8 +110,6 @@ func (s *Server) listenTCP() {
 			panic(fmt.Sprintf("Listen TCP error: %v", err))
 		}
 	}
-
-	debug("Server started, Listening on: %s:%d", s.IP, s.Port)
 
 	for {
 		select {
@@ -261,7 +275,7 @@ func (s *Server) handleRequest(connection Connection, request *Request) {
 	}
 
 	if s.WorkersCount > 0 {
-		connection.addTask(ctx)
+		connection.pushTask(ctx)
 	} else {
 		go func(context *Context) {
 			context.Next()

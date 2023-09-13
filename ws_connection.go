@@ -45,14 +45,14 @@ func (c *WebSocketConnection) close(syncConnectionManager bool) {
 		c.server.connectionManager.removeConnection(c)
 	}
 
-	debug("Connection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
+	debug("WebSocketConnection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
 }
 
 func (c *WebSocketConnection) writer() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			debug("TCPConnection %d writer stopped", c.ID())
+			debug("WebSocketConnection %d writer stopped", c.ID())
 			return
 		case data := <-c.messageChannel:
 			_ = c.socket.WriteMessage(websocket.BinaryMessage, data)
@@ -66,7 +66,7 @@ func (c *WebSocketConnection) reader() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			debug("TCPConnection %d reader stopped", c.ID())
+			debug("WebSocketConnection %d reader stopped", c.ID())
 			return
 		default:
 			messageType, buffer, err := c.socket.ReadMessage()
@@ -77,7 +77,7 @@ func (c *WebSocketConnection) reader() {
 			}
 
 			if err != nil {
-				debug("Socket read error: %v", err)
+				debug("WebSocket read error: %v", err)
 				return
 			}
 
@@ -100,6 +100,6 @@ func (c *WebSocketConnection) reader() {
 	}
 }
 
-func (c *WebSocketConnection) RemoteAddr() net.Addr {
+func (c *WebSocketConnection) RemoteAddress() net.Addr {
 	return c.socket.RemoteAddr()
 }
