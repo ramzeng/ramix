@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/gorilla/websocket"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -14,33 +17,56 @@ import (
 type Server struct {
 	ServerOptions
 	*routeGroup
-
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	router  *router
-	workers []*worker
-
-	decoder DecoderInterface
-	encoder EncoderInterface
-
-	heartbeatChecker *heartbeatChecker
-
+	upgrader          *websocket.Upgrader
+	connectionID      uint64
+	ctx               context.Context
+	cancel            context.CancelFunc
+	router            *router
+	workers           []*worker
+	decoder           DecoderInterface
+	encoder           EncoderInterface
+	heartbeatChecker  *heartbeatChecker
 	connectionManager *connectionManager
-	connectionOpen    func(connection *Connection)
-	connectionClose   func(connection *Connection)
+	connectionOpen    func(connection Connection)
+	connectionClose   func(connection Connection)
 }
 
 func (s *Server) Serve() {
-	go s.listen()
+	s.startWorkers()
+
+	go s.listenTCP()
+	go s.listenWebSocket()
 	go s.monitor()
 
 	<-s.stop()
 }
 
-func (s *Server) listen() {
-	s.startWorkers()
+func (s *Server) listenWebSocket() {
+	if s.WebSocketPath == "" {
+		return
+	}
 
+	debug("WebSocket server started, Listening on: %s:%d%s", s.IP, s.WebSocketPort, s.WebSocketPath)
+
+	http.HandleFunc(s.WebSocketPath, func(writer http.ResponseWriter, request *http.Request) {
+		socket, err := s.upgrader.Upgrade(writer, request, nil)
+
+		if err != nil {
+			debug("Upgrade error: %v", err)
+			return
+		}
+
+		atomic.AddUint64(&s.connectionID, 1)
+
+		go s.openWebSocketConnection(socket, s.connectionID)
+	})
+
+	if err := http.ListenAndServe(fmt.Sprintf("%s:%d", s.IP, s.WebSocketPort), nil); err != nil {
+		panic(fmt.Sprintf("Listen and serve error: %v", err))
+	}
+}
+
+func (s *Server) listenTCP() {
 	var listener net.Listener
 
 	if s.CertFile != "" && s.PrivateKeyFile != "" {
@@ -71,8 +97,6 @@ func (s *Server) listen() {
 
 	debug("Server started, Listening on: %s:%d", s.IP, s.Port)
 
-	var connectionID uint64
-
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -94,9 +118,9 @@ func (s *Server) listen() {
 				continue
 			}
 
-			go s.openConnection(socket, connectionID)
+			atomic.AddUint64(&s.connectionID, 1)
 
-			connectionID++
+			go s.openTCPConnection(socket, s.connectionID)
 		}
 	}
 }
@@ -163,18 +187,20 @@ func (s *Server) stopWorkers() {
 	}
 }
 
-func (s *Server) openConnection(socket net.Conn, connectionID uint64) {
-	connection := &Connection{
-		ID:             connectionID,
-		socket:         socket,
-		isClosed:       false,
-		messageChannel: make(chan []byte),
-		server:         s,
-		worker:         s.workers[connectionID%uint64(s.WorkersCount)],
-		frameDecoder: NewFrameDecoder(
-			WithLengthFieldOffset(4),
-			WithLengthFieldLength(4),
-		),
+func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID uint64) {
+	connection := &WebSocketConnection{
+		socket: socket,
+		netConnection: &netConnection{
+			id:             connectionID,
+			isClosed:       false,
+			messageChannel: make(chan []byte),
+			server:         s,
+			worker:         s.workers[connectionID%uint64(s.WorkersCount)],
+			frameDecoder: NewFrameDecoder(
+				WithLengthFieldOffset(4),
+				WithLengthFieldLength(4),
+			),
+		},
 	}
 
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
@@ -187,10 +213,39 @@ func (s *Server) openConnection(socket net.Conn, connectionID uint64) {
 
 	connection.open()
 
-	debug("Connection %d opened, worker %d assigned", connection.ID, connection.worker.id)
+	debug("WebSocketConnection %d opened, worker %d assigned", connection.ID(), connection.worker.id)
 }
 
-func (s *Server) handleRequest(connection *Connection, request *Request) {
+func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
+	connection := &TCPConnection{
+		socket: socket,
+		netConnection: &netConnection{
+			id:             connectionID,
+			isClosed:       false,
+			messageChannel: make(chan []byte),
+			server:         s,
+			worker:         s.workers[connectionID%uint64(s.WorkersCount)],
+			frameDecoder: NewFrameDecoder(
+				WithLengthFieldOffset(4),
+				WithLengthFieldLength(4),
+			),
+		},
+	}
+
+	connection.ctx, connection.cancel = context.WithCancel(context.Background())
+
+	if s.heartbeatChecker != nil {
+		connection.heartbeatChecker = s.heartbeatChecker.clone(connection)
+	}
+
+	s.connectionManager.addConnection(connection)
+
+	connection.open()
+
+	debug("TCPConnection %d opened, worker %d assigned", connection.ID(), connection.worker.id)
+}
+
+func (s *Server) handleRequest(connection Connection, request *Request) {
 	ctx := &Context{
 		Connection: connection,
 		Request:    request,
@@ -206,7 +261,7 @@ func (s *Server) handleRequest(connection *Connection, request *Request) {
 	}
 
 	if s.WorkersCount > 0 {
-		connection.worker.tasks <- ctx
+		connection.addTask(ctx)
 	} else {
 		go func(context *Context) {
 			context.Next()
@@ -214,11 +269,11 @@ func (s *Server) handleRequest(connection *Connection, request *Request) {
 	}
 }
 
-func (s *Server) OnConnectionOpen(callback func(connection *Connection)) {
+func (s *Server) OnConnectionOpen(callback func(connection Connection)) {
 	s.connectionOpen = callback
 }
 
-func (s *Server) OnConnectionClose(callback func(connection *Connection)) {
+func (s *Server) OnConnectionClose(callback func(connection Connection)) {
 	s.connectionClose = callback
 }
 
@@ -231,6 +286,13 @@ func NewServer(serverOptions ...ServerOption) *Server {
 
 	for _, option := range serverOptions {
 		option(&server.ServerOptions)
+	}
+
+	server.upgrader = &websocket.Upgrader{
+		ReadBufferSize: int(server.MaxReadBufferSize),
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	}
 
 	server.ctx, server.cancel = context.WithCancel(context.Background())

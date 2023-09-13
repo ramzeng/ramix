@@ -7,6 +7,8 @@ var defaultServerOptions = ServerOptions{
 	IP:                    "0.0.0.0",
 	IPVersion:             "tcp4",
 	Port:                  8899,
+	WebSocketPort:         8900,
+	WebSocketPath:         "/ws",
 	MaxConnectionsCount:   1024,
 	ConnectionGroupsCount: 10,
 	MaxReadBufferSize:     1024,
@@ -21,6 +23,8 @@ type ServerOptions struct {
 	IPVersion             string
 	IP                    string
 	Port                  int
+	WebSocketPort         int
+	WebSocketPath         string
 	CertFile              string
 	PrivateKeyFile        string
 	MaxConnectionsCount   int
@@ -55,6 +59,18 @@ func WithIP(ip string) ServerOption {
 func WithPort(port int) ServerOption {
 	return func(o *ServerOptions) {
 		o.Port = port
+	}
+}
+
+func WithWebSocketPort(webSocketPort int) ServerOption {
+	return func(o *ServerOptions) {
+		o.WebSocketPort = webSocketPort
+	}
+}
+
+func WithWebSocketPath(webSocketPath string) ServerOption {
+	return func(o *ServerOptions) {
+		o.WebSocketPath = webSocketPath
 	}
 }
 

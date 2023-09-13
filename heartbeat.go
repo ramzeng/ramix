@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-func newHeartbeatChecker(interval time.Duration, handler func(connection *Connection)) *heartbeatChecker {
+func newHeartbeatChecker(interval time.Duration, handler func(connection Connection)) *heartbeatChecker {
 	if handler == nil {
-		handler = func(connection *Connection) {
+		handler = func(connection Connection) {
 			if connection.isAlive() {
 				return
 			}
@@ -23,15 +23,15 @@ func newHeartbeatChecker(interval time.Duration, handler func(connection *Connec
 }
 
 type heartbeatChecker struct {
-	connection *Connection
+	connection Connection
 	interval   time.Duration
-	handler    func(connection *Connection)
+	handler    func(connection Connection)
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
 
 func (h *heartbeatChecker) start() {
-	h.connection.RefreshLastActiveTime()
+	h.connection.refreshLastActiveTime()
 
 	ticker := time.NewTicker(h.interval)
 
@@ -39,7 +39,7 @@ func (h *heartbeatChecker) start() {
 		select {
 		case <-h.ctx.Done():
 			ticker.Stop()
-			debug("Connection %d heartbeat checker stopped", h.connection.ID)
+			debug("TCPConnection %d heartbeat checker stopped", h.connection.ID())
 			return
 		case <-ticker.C:
 			h.handler(h.connection)
@@ -51,7 +51,7 @@ func (h *heartbeatChecker) stop() {
 	h.cancel()
 }
 
-func (h *heartbeatChecker) clone(connection *Connection) *heartbeatChecker {
+func (h *heartbeatChecker) clone(connection Connection) *heartbeatChecker {
 	checker := &heartbeatChecker{
 		connection: connection,
 		interval:   h.interval,

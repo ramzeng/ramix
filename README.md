@@ -19,6 +19,7 @@ A lightweight TCP Server framework based on Golang.
 - [x] Hooks
 - [x] Logger
 - [x] TLS Support
+- [x] WebSocket Support
 ## TODO
 - [ ] Unit test
 ## Installation
