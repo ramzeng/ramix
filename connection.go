@@ -10,7 +10,7 @@ import (
 
 type Connection interface {
 	ID() uint64
-	RemoteAddr() net.Addr
+	RemoteAddress() net.Addr
 	SendMessage(event uint32, body []byte) error
 	open()
 	writer()
@@ -18,7 +18,7 @@ type Connection interface {
 	close(syncConnectionManager bool)
 	refreshLastActiveTime()
 	isAlive() bool
-	addTask(ctx *Context)
+	pushTask(ctx *Context)
 }
 
 type netConnection struct {
@@ -43,7 +43,7 @@ func (c *netConnection) isAlive() bool {
 	return !c.isClosed && c.lastActiveTime.Add(c.server.HeartbeatTimeout).After(time.Now())
 }
 
-func (c *netConnection) addTask(ctx *Context) {
+func (c *netConnection) pushTask(ctx *Context) {
 	c.worker.tasks <- ctx
 }
 

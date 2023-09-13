@@ -39,7 +39,7 @@ func (h *heartbeatChecker) start() {
 		select {
 		case <-h.ctx.Done():
 			ticker.Stop()
-			debug("TCPConnection %d heartbeat checker stopped", h.connection.ID())
+			debug("Connection %d heartbeat checker stopped", h.connection.ID())
 			return
 		case <-ticker.C:
 			h.handler(h.connection)

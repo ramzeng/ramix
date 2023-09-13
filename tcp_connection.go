@@ -35,7 +35,7 @@ func (c *TCPConnection) reader() {
 			length, err := c.socket.Read(buffer)
 
 			if err != nil {
-				debug("Socket read error: %v", err)
+				debug("TCPSocket read error: %v", err)
 				return
 			}
 
@@ -58,7 +58,7 @@ func (c *TCPConnection) reader() {
 	}
 }
 
-func (c *TCPConnection) RemoteAddr() net.Addr {
+func (c *TCPConnection) RemoteAddress() net.Addr {
 	return c.socket.RemoteAddr()
 }
 
@@ -97,5 +97,5 @@ func (c *TCPConnection) close(syncConnectionManager bool) {
 		c.server.connectionManager.removeConnection(c)
 	}
 
-	debug("Connection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
+	debug("TCPConnection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
 }

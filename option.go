@@ -3,6 +3,8 @@ package ramix
 import "time"
 
 var defaultServerOptions = ServerOptions{
+	OnlyWebSocket:         false,
+	OnlyTCP:               false,
 	Name:                  "ramix",
 	IP:                    "0.0.0.0",
 	IPVersion:             "tcp4",
@@ -19,6 +21,8 @@ var defaultServerOptions = ServerOptions{
 }
 
 type ServerOptions struct {
+	OnlyWebSocket         bool
+	OnlyTCP               bool
 	Name                  string
 	IPVersion             string
 	IP                    string
@@ -37,6 +41,18 @@ type ServerOptions struct {
 }
 
 type ServerOption func(*ServerOptions)
+
+func OnlyWebSocket() ServerOption {
+	return func(o *ServerOptions) {
+		o.OnlyWebSocket = true
+	}
+}
+
+func OnlyTCP() ServerOption {
+	return func(o *ServerOptions) {
+		o.OnlyTCP = true
+	}
+}
 
 func WithName(name string) ServerOption {
 	return func(o *ServerOptions) {
