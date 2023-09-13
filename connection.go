@@ -8,113 +8,50 @@ import (
 	"time"
 )
 
-type Connection struct {
-	ID uint64
+type Connection interface {
+	ID() uint64
+	RemoteAddr() net.Addr
+	SendMessage(event uint32, body []byte) error
+	open()
+	writer()
+	reader()
+	close(syncConnectionManager bool)
+	refreshLastActiveTime()
+	isAlive() bool
+	addTask(ctx *Context)
+}
 
-	socket         net.Conn
-	isClosed       bool
-	ctx            context.Context
-	cancel         context.CancelFunc
-	messageChannel chan []byte
-	lastActiveTime time.Time
-
+type netConnection struct {
+	id               uint64
+	isClosed         bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	messageChannel   chan []byte
+	lastActiveTime   time.Time
 	server           *Server
 	worker           *worker
 	heartbeatChecker *heartbeatChecker
-
-	frameDecoder *FrameDecoder
-
-	lock sync.RWMutex
+	frameDecoder     *FrameDecoder
+	lock             sync.RWMutex
 }
 
-func (c *Connection) open() {
-	go c.reader()
-	go c.writer()
-	go c.heartbeatChecker.start()
-
-	if c.server.connectionOpen != nil {
-		c.server.connectionOpen(c)
-	}
+func (c *netConnection) refreshLastActiveTime() {
+	c.lastActiveTime = time.Now()
 }
 
-func (c *Connection) writer() {
-	for {
-		select {
-		case <-c.ctx.Done():
-			debug("Connection %d writer stopped", c.ID)
-			return
-		case data := <-c.messageChannel:
-			_, _ = c.socket.Write(data)
-		}
-	}
+func (c *netConnection) isAlive() bool {
+	return !c.isClosed && c.lastActiveTime.Add(c.server.HeartbeatTimeout).After(time.Now())
 }
 
-func (c *Connection) reader() {
-	defer c.close(true)
-
-	for {
-		select {
-		case <-c.ctx.Done():
-			debug("Connection %d reader stopped", c.ID)
-			return
-		default:
-			buffer := make([]byte, c.server.MaxReadBufferSize)
-
-			length, err := c.socket.Read(buffer)
-
-			if err != nil {
-				debug("Socket read error: %v", err)
-				return
-			}
-
-			c.RefreshLastActiveTime()
-
-			bytesSlices := c.frameDecoder.Decode(buffer[0:length])
-
-			for _, bytesSlice := range bytesSlices {
-
-				message, err := c.server.decoder.Decode(bytesSlice)
-
-				if err != nil {
-					debug("Message decode error: %v", err)
-					continue
-				}
-
-				c.server.handleRequest(c, newRequest(message))
-			}
-		}
-	}
+func (c *netConnection) addTask(ctx *Context) {
+	c.worker.tasks <- ctx
 }
 
-func (c *Connection) close(syncConnectionManager bool) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
-	if c.isClosed {
-		return
-	}
-
-	if c.server.connectionClose != nil {
-		c.server.connectionClose(c)
-	}
-
-	_ = c.socket.Close()
-
-	c.isClosed = true
-
-	c.cancel()
-	close(c.messageChannel)
-
-	c.heartbeatChecker.stop()
-
-	if syncConnectionManager {
-		c.server.connectionManager.removeConnection(c)
-	}
-
-	debug("Connection %d closed, remote address: %v", c.ID, c.socket.RemoteAddr())
+func (c *netConnection) ID() uint64 {
+	return c.id
 }
 
-func (c *Connection) SendMessage(event uint32, body []byte) error {
+func (c *netConnection) SendMessage(event uint32, body []byte) error {
 	if c.isClosed {
 		return errors.New("connection is closed")
 	}
@@ -132,12 +69,4 @@ func (c *Connection) SendMessage(event uint32, body []byte) error {
 	c.messageChannel <- encodedMessage
 
 	return nil
-}
-
-func (c *Connection) RefreshLastActiveTime() {
-	c.lastActiveTime = time.Now()
-}
-
-func (c *Connection) isAlive() bool {
-	return !c.isClosed && c.lastActiveTime.Add(c.server.HeartbeatTimeout).After(time.Now())
 }

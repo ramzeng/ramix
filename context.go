@@ -3,7 +3,7 @@ package ramix
 import "sync"
 
 type Context struct {
-	Connection *Connection
+	Connection Connection
 	Request    *Request
 
 	handlers []Handler

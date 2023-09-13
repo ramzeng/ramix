@@ -19,6 +19,7 @@
 - [x] Hooks
 - [x] 日志能力
 - [x] TLS 支持
+- [x] WebSocket Support
 ## TODO
 - [ ] 单元测试
 ## 安装

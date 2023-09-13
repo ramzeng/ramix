@@ -4,7 +4,7 @@ import (
 	"github.com/ramzeng/ramix"
 )
 
-var connections = make(map[uint64]*ramix.Connection)
+var connections = make(map[uint64]ramix.Connection)
 
 func main() {
 	ramix.SetMode(ramix.DebugMode)
@@ -16,17 +16,17 @@ func main() {
 
 	server.Use(ramix.Recovery(), ramix.Logger())
 
-	server.OnConnectionOpen(func(connection *ramix.Connection) {
-		connections[connection.ID] = connection
+	server.OnConnectionOpen(func(connection ramix.Connection) {
+		connections[connection.ID()] = connection
 	})
 
-	server.OnConnectionClose(func(connection *ramix.Connection) {
-		delete(connections, connection.ID)
+	server.OnConnectionClose(func(connection ramix.Connection) {
+		delete(connections, connection.ID())
 	})
 
 	server.RegisterRoute(0, func(context *ramix.Context) {
 		for connectionId, connection := range connections {
-			if connectionId == context.Connection.ID {
+			if connectionId == context.Connection.ID() {
 				continue
 			}
 
