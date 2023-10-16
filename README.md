@@ -119,5 +119,9 @@ func main() {
 	}
 }
 ```
+## Sponsored by JetBrains
+I am very grateful to JetBrains for providing me with an open-source license for their IDE, which allows me to carry out development work on this project and other open-source projects smoothly.
+
+[![](https://resources.jetbrains.com/storage/products/company/brand/logos/jb_beam.svg)](https://www.jetbrains.com/?from=https://github.com/ramzeng)
 ## License
 MIT
