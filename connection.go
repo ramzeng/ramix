@@ -70,3 +70,16 @@ func (c *netConnection) SendMessage(event uint32, body []byte) error {
 
 	return nil
 }
+
+func newNetConnection(connectionID uint64, s *Server) *netConnection {
+	return &netConnection{
+		id:             connectionID,
+		isClosed:       false,
+		messageChannel: make(chan []byte),
+		server:         s,
+		frameDecoder: NewFrameDecoder(
+			WithLengthFieldOffset(4),
+			WithLengthFieldLength(4),
+		),
+	}
+}

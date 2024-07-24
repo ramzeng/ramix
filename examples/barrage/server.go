@@ -11,6 +11,7 @@ func main() {
 
 	server := ramix.NewServer(
 		ramix.WithPort(8899),
+		ramix.UseWorkerPool(),
 		ramix.WithWorkersCount(100),
 	)
 
