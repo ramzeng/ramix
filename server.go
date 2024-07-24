@@ -32,7 +32,11 @@ type Server struct {
 }
 
 func (s *Server) Serve() {
-	s.startWorkers()
+	s.selfCheck()
+
+	if s.UseWorkerPool {
+		s.startWorkers()
+	}
 
 	switch {
 	case s.OnlyTCP:
@@ -202,19 +206,15 @@ func (s *Server) stopWorkers() {
 }
 
 func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID uint64) {
+	c := newNetConnection(connectionID, s)
+
+	if s.UseWorkerPool {
+		c.worker = s.workers[connectionID%uint64(s.WorkersCount)]
+	}
+
 	connection := &WebSocketConnection{
-		socket: socket,
-		netConnection: &netConnection{
-			id:             connectionID,
-			isClosed:       false,
-			messageChannel: make(chan []byte),
-			server:         s,
-			worker:         s.workers[connectionID%uint64(s.WorkersCount)],
-			frameDecoder: NewFrameDecoder(
-				WithLengthFieldOffset(4),
-				WithLengthFieldLength(4),
-			),
-		},
+		socket:        socket,
+		netConnection: c,
 	}
 
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
@@ -231,19 +231,15 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 }
 
 func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
+	c := newNetConnection(connectionID, s)
+
+	if s.UseWorkerPool {
+		c.worker = s.workers[connectionID%uint64(s.WorkersCount)]
+	}
+
 	connection := &TCPConnection{
-		socket: socket,
-		netConnection: &netConnection{
-			id:             connectionID,
-			isClosed:       false,
-			messageChannel: make(chan []byte),
-			server:         s,
-			worker:         s.workers[connectionID%uint64(s.WorkersCount)],
-			frameDecoder: NewFrameDecoder(
-				WithLengthFieldOffset(4),
-				WithLengthFieldLength(4),
-			),
-		},
+		socket:        socket,
+		netConnection: c,
 	}
 
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
@@ -256,7 +252,11 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 
 	connection.open()
 
-	debug("TCPConnection %d opened, worker %d assigned", connection.ID(), connection.worker.id)
+	if s.UseWorkerPool {
+		debug("TCPConnection %d opened, worker %d assigned", connection.ID(), connection.worker.id)
+	} else {
+		debug("TCPConnection %d opened", connection.ID())
+	}
 }
 
 func (s *Server) handleRequest(connection Connection, request *Request) {
@@ -274,7 +274,7 @@ func (s *Server) handleRequest(connection Connection, request *Request) {
 		})
 	}
 
-	if s.WorkersCount > 0 {
+	if s.UseWorkerPool {
 		connection.pushTask(ctx)
 	} else {
 		go func(context *Context) {
@@ -289,6 +289,12 @@ func (s *Server) OnConnectionOpen(callback func(connection Connection)) {
 
 func (s *Server) OnConnectionClose(callback func(connection Connection)) {
 	s.connectionClose = callback
+}
+
+func (s *Server) selfCheck() {
+	if s.UseWorkerPool && s.WorkersCount <= 0 {
+		panic("Workers count must be greater than 0")
+	}
 }
 
 func NewServer(serverOptions ...ServerOption) *Server {
