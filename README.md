@@ -41,6 +41,9 @@ func main() {
 
 	server := ramix.NewServer(
 		ramix.WithPort(8899),
+		// worker pool mode
+		// if you don't want to use worker pool, you can remove the following two lines
+		ramix.UseWorkerPool(),
 		ramix.WithWorkersCount(100),
 	)
 

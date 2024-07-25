@@ -41,6 +41,9 @@ func main() {
 
 	server := ramix.NewServer(
 		ramix.WithPort(8899),
+		// 协程池模式
+		// 如果你不想使用协程池，可以删除以下两行
+		ramix.UseWorkerPool(),
 		ramix.WithWorkersCount(100),
 	)
 
