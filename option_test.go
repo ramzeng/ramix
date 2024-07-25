@@ -50,21 +50,21 @@ func TestWithMaxConnectionsCount(t *testing.T) {
 	}
 }
 
-func TestWithMaxReadBufferSize(t *testing.T) {
+func TestWithConnectionReadBufferSize(t *testing.T) {
 	serverOptions := defaultServerOptions
-	serverOption := WithMaxReadBufferSize(2048)
+	serverOption := WithConnectionReadBufferSize(2048)
 	serverOption(&serverOptions)
-	if serverOptions.MaxReadBufferSize != 2048 {
-		t.Error("serverOptions.MaxReadBufferSize should be 2048")
+	if serverOptions.ConnectionReadBufferSize != 2048 {
+		t.Error("serverOptions.ConnectionReadBufferSize should be 2048")
 	}
 }
 
 func TestWithMaxTasksCount(t *testing.T) {
 	serverOptions := defaultServerOptions
-	serverOption := WithMaxTasksCount(2048)
+	serverOption := WithMaxWorkerTasksCount(2048)
 	serverOption(&serverOptions)
-	if serverOptions.MaxTasksCount != 2048 {
-		t.Error("serverOptions.MaxTasksCount should be 2048")
+	if serverOptions.MaxWorkerTasksCount != 2048 {
+		t.Error("serverOptions.MaxWorkerTasksCount should be 2048")
 	}
 }
 

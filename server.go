@@ -189,7 +189,7 @@ func (s *Server) startWorkers() {
 	s.workers = make([]*worker, s.WorkersCount)
 
 	for i := 0; i < int(s.WorkersCount); i++ {
-		w := newWorker(i, s.MaxTasksCount, s.ctx)
+		w := newWorker(i, s.MaxWorkerTasksCount, s.ctx)
 		w.start()
 		s.workers[i] = w
 	}
@@ -214,7 +214,7 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 	if s.UseWorkerPool {
 		c.worker = s.workers[connectionID%uint64(s.WorkersCount)]
 	} else {
-		w := newWorker(int(connectionID), s.MaxTasksCount, connection.ctx)
+		w := newWorker(int(connectionID), s.MaxWorkerTasksCount, connection.ctx)
 		w.start()
 		c.worker = w
 	}
@@ -243,7 +243,7 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 	if s.UseWorkerPool {
 		c.worker = s.workers[connectionID%uint64(s.WorkersCount)]
 	} else {
-		w := newWorker(int(connectionID), s.MaxTasksCount, connection.ctx)
+		w := newWorker(int(connectionID), s.MaxWorkerTasksCount, connection.ctx)
 		w.start()
 		c.worker = w
 	}
@@ -304,7 +304,7 @@ func NewServer(serverOptions ...ServerOption) *Server {
 	}
 
 	server.upgrader = &websocket.Upgrader{
-		ReadBufferSize: int(server.MaxReadBufferSize),
+		ReadBufferSize: int(server.ConnectionReadBufferSize),
 		CheckOrigin: func(r *http.Request) bool {
 			return true
 		},

@@ -75,7 +75,7 @@ func newNetConnection(connectionID uint64, s *Server) *netConnection {
 	return &netConnection{
 		id:             connectionID,
 		isClosed:       false,
-		messageChannel: make(chan []byte),
+		messageChannel: make(chan []byte, s.ConnectionWriteBufferSize),
 		server:         s,
 		frameDecoder: NewFrameDecoder(
 			WithLengthFieldOffset(4),
