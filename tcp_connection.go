@@ -30,7 +30,7 @@ func (c *TCPConnection) reader() {
 			debug("TCPConnection %d reader stopped", c.ID())
 			return
 		default:
-			buffer := make([]byte, c.server.MaxReadBufferSize)
+			buffer := make([]byte, c.server.ConnectionReadBufferSize)
 
 			length, err := c.socket.Read(buffer)
 

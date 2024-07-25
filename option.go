@@ -3,43 +3,45 @@ package ramix
 import "time"
 
 var defaultServerOptions = ServerOptions{
-	OnlyWebSocket:         false,
-	OnlyTCP:               false,
-	Name:                  "ramix",
-	IP:                    "0.0.0.0",
-	IPVersion:             "tcp4",
-	Port:                  8899,
-	WebSocketPort:         8900,
-	WebSocketPath:         "/ws",
-	MaxConnectionsCount:   1024,
-	ConnectionGroupsCount: 10,
-	MaxReadBufferSize:     1024,
-	UseWorkerPool:         false,
-	WorkersCount:          10,
-	MaxTasksCount:         1024,
-	HeartbeatInterval:     5 * time.Second,
-	HeartbeatTimeout:      60 * time.Second,
+	OnlyWebSocket:             false,
+	OnlyTCP:                   false,
+	Name:                      "ramix",
+	IP:                        "0.0.0.0",
+	IPVersion:                 "tcp4",
+	Port:                      8899,
+	WebSocketPort:             8900,
+	WebSocketPath:             "/ws",
+	MaxConnectionsCount:       1024,
+	ConnectionGroupsCount:     10,
+	ConnectionReadBufferSize:  1024,
+	ConnectionWriteBufferSize: 1024,
+	UseWorkerPool:             false,
+	WorkersCount:              10,
+	MaxWorkerTasksCount:       1024,
+	HeartbeatInterval:         5 * time.Second,
+	HeartbeatTimeout:          60 * time.Second,
 }
 
 type ServerOptions struct {
-	OnlyWebSocket         bool
-	OnlyTCP               bool
-	Name                  string
-	IPVersion             string
-	IP                    string
-	Port                  int
-	WebSocketPort         int
-	WebSocketPath         string
-	CertFile              string
-	PrivateKeyFile        string
-	MaxConnectionsCount   int
-	ConnectionGroupsCount int
-	MaxReadBufferSize     uint32
-	UseWorkerPool         bool // true: all connections share a worker pool, false: each connection has a worker
-	WorkersCount          uint32
-	MaxTasksCount         uint32
-	HeartbeatInterval     time.Duration
-	HeartbeatTimeout      time.Duration
+	OnlyWebSocket             bool
+	OnlyTCP                   bool
+	Name                      string
+	IPVersion                 string
+	IP                        string
+	Port                      int
+	WebSocketPort             int
+	WebSocketPath             string
+	CertFile                  string
+	PrivateKeyFile            string
+	MaxConnectionsCount       int
+	ConnectionGroupsCount     int
+	ConnectionReadBufferSize  uint32
+	ConnectionWriteBufferSize uint32
+	UseWorkerPool             bool // true: all connections share a worker pool, false: each connection has a worker
+	WorkersCount              uint32
+	MaxWorkerTasksCount       uint32
+	HeartbeatInterval         time.Duration
+	HeartbeatTimeout          time.Duration
 }
 
 type ServerOption func(*ServerOptions)
@@ -116,9 +118,15 @@ func WithConnectionGroupsCount(connectionGroupsCount int) ServerOption {
 	}
 }
 
-func WithMaxReadBufferSize(maxReadBufferSize uint32) ServerOption {
+func WithConnectionReadBufferSize(connectionReadBufferSize uint32) ServerOption {
 	return func(o *ServerOptions) {
-		o.MaxReadBufferSize = maxReadBufferSize
+		o.ConnectionReadBufferSize = connectionReadBufferSize
+	}
+}
+
+func WithConnectionWriteBufferSize(connectionWriteBufferSize uint32) ServerOption {
+	return func(o *ServerOptions) {
+		o.ConnectionWriteBufferSize = connectionWriteBufferSize
 	}
 }
 
@@ -134,9 +142,9 @@ func WithWorkersCount(workersCount uint32) ServerOption {
 	}
 }
 
-func WithMaxTasksCount(maxTasksCount uint32) ServerOption {
+func WithMaxWorkerTasksCount(maxTasksCount uint32) ServerOption {
 	return func(o *ServerOptions) {
-		o.MaxTasksCount = maxTasksCount
+		o.MaxWorkerTasksCount = maxTasksCount
 	}
 }
 
