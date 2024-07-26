@@ -9,10 +9,9 @@ func main() {
 
 	server := ramix.NewServer(
 		ramix.WithPort(8899),
-		ramix.UseWorkerPool(),
-		ramix.WithWorkersCount(100),
 	)
 
+	server.UseWorkerPool(ramix.NewRoundRobinWorkerPool(100, 1024))
 	server.Use(ramix.Recovery(), ramix.Logger())
 
 	server.RegisterRoute(0, func(context *ramix.Context) {
