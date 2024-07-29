@@ -3,9 +3,10 @@ package ramix
 import "context"
 
 type worker struct {
-	id    int
-	tasks chan *Context
-	ctx   context.Context
+	id     int
+	tasks  chan *Context
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func (w *worker) start() {
@@ -32,13 +33,17 @@ func (w *worker) start() {
 }
 
 func (w *worker) stop() {
+	w.cancel()
 	close(w.tasks)
 }
 
-func newWorker(workerID int, maxTasksCount uint32, ctx context.Context) *worker {
-	return &worker{
+func newWorker(workerID int, maxTasksCount uint32) *worker {
+	w := &worker{
 		id:    workerID,
 		tasks: make(chan *Context, maxTasksCount),
-		ctx:   ctx,
 	}
+
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+
+	return w
 }

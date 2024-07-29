@@ -68,15 +68,6 @@ func TestWithMaxTasksCount(t *testing.T) {
 	}
 }
 
-func TestWithWorkersCount(t *testing.T) {
-	serverOptions := defaultServerOptions
-	serverOption := WithWorkersCount(2048)
-	serverOption(&serverOptions)
-	if serverOptions.WorkersCount != 2048 {
-		t.Error("serverOptions.WorkersCount should be 2048")
-	}
-}
-
 func TestWithHeartbeatInterval(t *testing.T) {
 	serverOptions := defaultServerOptions
 	serverOption := WithHeartbeatInterval(10 * time.Second)

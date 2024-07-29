@@ -37,3 +37,11 @@ func (c *Context) Get(key string) any {
 
 	return c.keys[key]
 }
+
+func newContext(connection Connection, request *Request) *Context {
+	return &Context{
+		Connection: connection,
+		Request:    request,
+		step:       -1,
+	}
+}

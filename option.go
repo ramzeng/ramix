@@ -15,8 +15,6 @@ var defaultServerOptions = ServerOptions{
 	ConnectionGroupsCount:     10,
 	ConnectionReadBufferSize:  1024,
 	ConnectionWriteBufferSize: 1024,
-	UseWorkerPool:             false,
-	WorkersCount:              10,
 	MaxWorkerTasksCount:       1024,
 	HeartbeatInterval:         5 * time.Second,
 	HeartbeatTimeout:          60 * time.Second,
@@ -37,8 +35,6 @@ type ServerOptions struct {
 	ConnectionGroupsCount     int
 	ConnectionReadBufferSize  uint32
 	ConnectionWriteBufferSize uint32
-	UseWorkerPool             bool // true: all connections share a worker pool, false: each connection has a worker
-	WorkersCount              uint32
 	MaxWorkerTasksCount       uint32
 	HeartbeatInterval         time.Duration
 	HeartbeatTimeout          time.Duration
@@ -127,18 +123,6 @@ func WithConnectionReadBufferSize(connectionReadBufferSize uint32) ServerOption 
 func WithConnectionWriteBufferSize(connectionWriteBufferSize uint32) ServerOption {
 	return func(o *ServerOptions) {
 		o.ConnectionWriteBufferSize = connectionWriteBufferSize
-	}
-}
-
-func UseWorkerPool() ServerOption {
-	return func(o *ServerOptions) {
-		o.UseWorkerPool = true
-	}
-}
-
-func WithWorkersCount(workersCount uint32) ServerOption {
-	return func(o *ServerOptions) {
-		o.WorkersCount = workersCount
 	}
 }
 

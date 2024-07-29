@@ -98,7 +98,7 @@ func (c *TCPConnection) close(syncConnectionManager bool) {
 	}
 
 	// If the worker pool is not used, need to stop the worker by self
-	if !c.server.UseWorkerPool {
+	if !c.server.UsingWorkerPool() {
 		c.worker.stop()
 	}
 

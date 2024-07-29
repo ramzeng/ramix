@@ -17,25 +17,23 @@ import (
 type Server struct {
 	ServerOptions
 	*routeGroup
-	upgrader          *websocket.Upgrader
-	connectionID      uint64
-	ctx               context.Context
-	cancel            context.CancelFunc
-	router            *router
-	workers           []*worker
-	decoder           DecoderInterface
-	encoder           EncoderInterface
-	heartbeatChecker  *heartbeatChecker
-	connectionManager *connectionManager
-	connectionOpen    func(connection Connection)
-	connectionClose   func(connection Connection)
+	upgrader            *websocket.Upgrader
+	currentConnectionID uint64
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	router              *router
+	workerPool          WorkerPool
+	decoder             DecoderInterface
+	encoder             EncoderInterface
+	heartbeatChecker    *heartbeatChecker
+	connectionManager   *connectionManager
+	connectionOpen      func(connection Connection)
+	connectionClose     func(connection Connection)
 }
 
 func (s *Server) Serve() {
-	s.selfCheck()
-
-	if s.UseWorkerPool {
-		s.startWorkers()
+	if s.UsingWorkerPool() {
+		s.startWorkerPool()
 	}
 
 	switch {
@@ -66,9 +64,9 @@ func (s *Server) listenWebSocket() {
 			return
 		}
 
-		atomic.AddUint64(&s.connectionID, 1)
+		atomic.AddUint64(&s.currentConnectionID, 1)
 
-		go s.openWebSocketConnection(socket, s.connectionID)
+		go s.openWebSocketConnection(socket, s.currentConnectionID)
 	})
 
 	debug("WebSocket server is starting on %s:%d", s.IP, s.WebSocketPort)
@@ -136,9 +134,9 @@ func (s *Server) listenTCP() {
 				continue
 			}
 
-			atomic.AddUint64(&s.connectionID, 1)
+			atomic.AddUint64(&s.currentConnectionID, 1)
 
-			go s.openTCPConnection(socket, s.connectionID)
+			go s.openTCPConnection(socket, s.currentConnectionID)
 		}
 	}
 }
@@ -157,8 +155,8 @@ func (s *Server) stop() <-chan struct{} {
 
 			s.cancel()
 
-			s.stopWorkers()
-			s.connectionManager.clearConnections()
+			s.stopWorkerPool()
+			s.clearConnections()
 
 			debug("Server stopped")
 
@@ -185,20 +183,17 @@ func (s *Server) monitor() {
 	}
 }
 
-func (s *Server) startWorkers() {
-	s.workers = make([]*worker, s.WorkersCount)
-
-	for i := 0; i < int(s.WorkersCount); i++ {
-		w := newWorker(i, s.MaxWorkerTasksCount, s.ctx)
-		w.start()
-		s.workers[i] = w
-	}
+func (s *Server) startWorkerPool() {
+	s.workerPool.init()
+	s.workerPool.start()
 }
 
-func (s *Server) stopWorkers() {
-	for _, w := range s.workers {
-		w.stop()
-	}
+func (s *Server) stopWorkerPool() {
+	s.workerPool.stop()
+}
+
+func (s *Server) clearConnections() {
+	s.connectionManager.clearConnections()
 }
 
 func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID uint64) {
@@ -211,10 +206,8 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
 
-	if s.UseWorkerPool {
-		c.worker = s.workers[connectionID%uint64(s.WorkersCount)]
-	} else {
-		w := newWorker(int(connectionID), s.MaxWorkerTasksCount, connection.ctx)
+	if !s.UsingWorkerPool() {
+		w := newWorker(int(connectionID), s.MaxWorkerTasksCount)
 		w.start()
 		c.worker = w
 	}
@@ -240,10 +233,8 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
 
-	if s.UseWorkerPool {
-		c.worker = s.workers[connectionID%uint64(s.WorkersCount)]
-	} else {
-		w := newWorker(int(connectionID), s.MaxWorkerTasksCount, connection.ctx)
+	if !s.UsingWorkerPool() {
+		w := newWorker(int(connectionID), s.MaxWorkerTasksCount)
 		w.start()
 		c.worker = w
 	}
@@ -256,15 +247,11 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 
 	connection.open()
 
-	debug("TCPConnection %d opened, worker %d assigned", connection.ID(), connection.worker.id)
+	debug("TCPConnection %d opened", connection.ID())
 }
 
 func (s *Server) handleRequest(connection Connection, request *Request) {
-	ctx := &Context{
-		Connection: connection,
-		Request:    request,
-		step:       -1,
-	}
+	ctx := newContext(connection, request)
 
 	if handlers, ok := s.router.routes[ctx.Request.Message.Event]; ok {
 		ctx.handlers = append(ctx.handlers, handlers...)
@@ -274,8 +261,11 @@ func (s *Server) handleRequest(connection Connection, request *Request) {
 		})
 	}
 
-	// push task to logic worker
-	connection.pushTask(ctx)
+	if s.UsingWorkerPool() {
+		s.workerPool.submitTask(ctx)
+	} else {
+		connection.submitTask(ctx)
+	}
 }
 
 func (s *Server) OnConnectionOpen(callback func(connection Connection)) {
@@ -286,10 +276,12 @@ func (s *Server) OnConnectionClose(callback func(connection Connection)) {
 	s.connectionClose = callback
 }
 
-func (s *Server) selfCheck() {
-	if s.UseWorkerPool && s.WorkersCount <= 0 {
-		panic("Workers count must be greater than 0")
-	}
+func (s *Server) UseWorkerPool(workerPool WorkerPool) {
+	s.workerPool = workerPool
+}
+
+func (s *Server) UsingWorkerPool() bool {
+	return s.workerPool != nil
 }
 
 func NewServer(serverOptions ...ServerOption) *Server {

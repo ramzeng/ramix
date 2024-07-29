@@ -18,7 +18,7 @@ type Connection interface {
 	close(syncConnectionManager bool)
 	refreshLastActiveTime()
 	isAlive() bool
-	pushTask(ctx *Context)
+	submitTask(ctx *Context)
 }
 
 type netConnection struct {
@@ -43,7 +43,7 @@ func (c *netConnection) isAlive() bool {
 	return !c.isClosed && c.lastActiveTime.Add(c.server.HeartbeatTimeout).After(time.Now())
 }
 
-func (c *netConnection) pushTask(ctx *Context) {
+func (c *netConnection) submitTask(ctx *Context) {
 	c.worker.tasks <- ctx
 }
 
