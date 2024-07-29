@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -179,6 +180,7 @@ func (s *Server) monitor() {
 			return
 		case <-time.After(time.Second * 3):
 			debug("Connections count: %d\n", s.connectionManager.connectionsCount())
+			debug("Goroutines count: %d\n", runtime.NumGoroutine())
 		}
 	}
 }
