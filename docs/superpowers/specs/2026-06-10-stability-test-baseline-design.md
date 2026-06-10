@@ -68,7 +68,7 @@ func WithTransports(transports ...Transport) ServerOption
 func WithShutdownTimeout(timeout time.Duration) ServerOption
 func WithWorkerCount(count uint32) ServerOption
 func WithWorkerQueueCapacity(capacity uint32) ServerOption
-func WithMaxFrameLength(length uint64) ServerOption
+func WithServerMaxFrameLength(length uint64) ServerOption
 ```
 
 Both TCP and WebSocket are enabled by default, matching the current server behavior.
@@ -182,8 +182,10 @@ Startup follows this sequence:
 5. Bind each enabled listener, checking for cancellation between binds.
 6. If validation, binding, cancellation, or a stop request occurs, close resources,
    transition to `stopped`, and close `startupDone`.
-7. Publish `running`, start workers and serving goroutines, and close `startupDone`.
-8. Wait for context cancellation, an unexpected serving error, or shutdown.
+7. Start workers and transport-serving goroutines behind a closed startup gate.
+8. Publish `running`, open the startup gate, and close `startupDone` so no connection
+   can be accepted while the externally visible state is still `starting`.
+9. Wait for context cancellation, an unexpected serving error, or shutdown.
 
 Normal listener-closed errors produced by shutdown are filtered and are not reported
 as runtime failures.
