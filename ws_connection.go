@@ -88,7 +88,11 @@ func (c *WebSocketConnection) reader() {
 
 			c.refreshLastActiveTime()
 
-			bytesSlices := c.frameDecoder.Decode(buffer)
+			bytesSlices, err := c.frameDecoder.Decode(buffer)
+			if err != nil {
+				debug("Frame decode error: %v", err)
+				return
+			}
 
 			for _, bytesSlice := range bytesSlices {
 
@@ -96,7 +100,7 @@ func (c *WebSocketConnection) reader() {
 
 				if err != nil {
 					debug("Message decode error: %v", err)
-					continue
+					return
 				}
 
 				c.server.handleRequest(c, newRequest(message))

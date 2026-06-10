@@ -198,7 +198,12 @@ func (s *Server) clearConnections() {
 }
 
 func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID uint64) {
-	c := newNetConnection(connectionID, s)
+	c, err := newNetConnection(connectionID, s)
+	if err != nil {
+		debug("Frame decoder construction error: %v", err)
+		_ = socket.Close()
+		return
+	}
 
 	connection := &WebSocketConnection{
 		socket:        socket,
@@ -225,7 +230,12 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 }
 
 func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
-	c := newNetConnection(connectionID, s)
+	c, err := newNetConnection(connectionID, s)
+	if err != nil {
+		debug("Frame decoder construction error: %v", err)
+		_ = socket.Close()
+		return
+	}
 
 	connection := &TCPConnection{
 		socket:        socket,
@@ -293,6 +303,14 @@ func NewServer(serverOptions ...ServerOption) (*Server, error) {
 	}
 
 	if err := validateServerOptions(opts); err != nil {
+		return nil, err
+	}
+
+	if _, err := NewFrameDecoder(
+		WithLengthFieldOffset(4),
+		WithLengthFieldLength(4),
+		WithMaxFrameLength(opts.MaxFrameLength),
+	); err != nil {
 		return nil, err
 	}
 

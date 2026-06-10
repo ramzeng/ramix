@@ -71,15 +71,21 @@ func (c *netConnection) SendMessage(event uint32, body []byte) error {
 	return nil
 }
 
-func newNetConnection(connectionID uint64, s *Server) *netConnection {
+func newNetConnection(connectionID uint64, s *Server) (*netConnection, error) {
+	frameDecoder, err := NewFrameDecoder(
+		WithLengthFieldOffset(4),
+		WithLengthFieldLength(4),
+		WithMaxFrameLength(s.MaxFrameLength),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &netConnection{
 		id:             connectionID,
 		isClosed:       false,
 		messageChannel: make(chan []byte, s.ConnectionWriteBufferSize),
 		server:         s,
-		frameDecoder: NewFrameDecoder(
-			WithLengthFieldOffset(4),
-			WithLengthFieldLength(4),
-		),
-	}
+		frameDecoder:   frameDecoder,
+	}, nil
 }

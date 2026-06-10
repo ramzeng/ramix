@@ -41,7 +41,11 @@ func (c *TCPConnection) reader() {
 
 			c.refreshLastActiveTime()
 
-			bytesSlices := c.frameDecoder.Decode(buffer[0:length])
+			bytesSlices, err := c.frameDecoder.Decode(buffer[0:length])
+			if err != nil {
+				debug("Frame decode error: %v", err)
+				return
+			}
 
 			for _, bytesSlice := range bytesSlices {
 
@@ -49,7 +53,7 @@ func (c *TCPConnection) reader() {
 
 				if err != nil {
 					debug("Message decode error: %v", err)
-					continue
+					return
 				}
 
 				c.server.handleRequest(c, newRequest(message))
