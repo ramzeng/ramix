@@ -37,14 +37,13 @@ func (s *Server) Serve() {
 		s.startWorkerPool()
 	}
 
-	switch {
-	case s.OnlyTCP:
-		go s.listenTCP()
-	case s.OnlyWebSocket:
-		go s.listenWebSocket()
-	default:
-		go s.listenTCP()
-		go s.listenWebSocket()
+	for _, transport := range s.Transports {
+		switch transport {
+		case TransportTCP:
+			go s.listenTCP()
+		case TransportWebSocket:
+			go s.listenWebSocket()
+		}
 	}
 
 	go s.monitor()
@@ -209,7 +208,7 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
 
 	if !s.UsingWorkerPool() {
-		w := newWorker(int(connectionID), s.MaxWorkerTasksCount)
+		w := newWorker(int(connectionID), s.WorkerQueueCapacity)
 		w.start()
 		c.worker = w
 	}
@@ -236,7 +235,7 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
 
 	if !s.UsingWorkerPool() {
-		w := newWorker(int(connectionID), s.MaxWorkerTasksCount)
+		w := newWorker(int(connectionID), s.WorkerQueueCapacity)
 		w.start()
 		c.worker = w
 	}
@@ -286,15 +285,21 @@ func (s *Server) UsingWorkerPool() bool {
 	return s.workerPool != nil
 }
 
-func NewServer(serverOptions ...ServerOption) *Server {
-	server := &Server{
-		ServerOptions: defaultServerOptions,
-		decoder:       &Decoder{},
-		encoder:       &Encoder{},
-	}
+func NewServer(serverOptions ...ServerOption) (*Server, error) {
+	opts := defaultServerOptions()
 
 	for _, option := range serverOptions {
-		option(&server.ServerOptions)
+		option(&opts)
+	}
+
+	if err := validateServerOptions(opts); err != nil {
+		return nil, err
+	}
+
+	server := &Server{
+		ServerOptions: opts,
+		decoder:       &Decoder{},
+		encoder:       &Encoder{},
 	}
 
 	server.upgrader = &websocket.Upgrader{
@@ -311,5 +316,5 @@ func NewServer(serverOptions ...ServerOption) *Server {
 	server.connectionManager = newConnectionManager(server.ConnectionGroupsCount)
 	server.heartbeatChecker = newHeartbeatChecker(server.HeartbeatInterval, nil)
 
-	return server
+	return server, nil
 }

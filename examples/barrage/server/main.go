@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/ramzeng/ramix"
+	"log"
 )
 
 var connections = make(map[uint64]ramix.Connection)
@@ -9,9 +10,12 @@ var connections = make(map[uint64]ramix.Connection)
 func main() {
 	ramix.SetMode(ramix.DebugMode)
 
-	server := ramix.NewServer(
+	server, err := ramix.NewServer(
 		ramix.WithPort(8899),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	server.UseWorkerPool(ramix.NewRoundRobinWorkerPool(100, 1024))
 	server.Use(ramix.Recovery(), ramix.Logger())

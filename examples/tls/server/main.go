@@ -2,16 +2,20 @@ package main
 
 import (
 	"github.com/ramzeng/ramix"
+	"log"
 )
 
 func main() {
 	ramix.SetMode(ramix.DebugMode)
 
-	server := ramix.NewServer(
+	server, err := ramix.NewServer(
 		ramix.WithPort(8899),
 		ramix.WithCertFile("examples/tls/public_certificate.pem"),
 		ramix.WithPrivateKeyFile("examples/tls/private_key.pem"),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	server.UseWorkerPool(ramix.NewRoundRobinWorkerPool(100, 1024))
 	server.Use(ramix.Recovery(), ramix.Logger())
