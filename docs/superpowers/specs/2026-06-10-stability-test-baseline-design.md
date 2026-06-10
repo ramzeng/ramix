@@ -54,37 +54,84 @@ func (s *Server) Run(ctx context.Context) error
 func (s *Server) Shutdown(ctx context.Context) error
 ```
 
+Transport selection uses an explicit enum option:
+
+```go
+type Transport uint8
+
+const (
+    TransportTCP Transport = iota + 1
+    TransportWebSocket
+)
+
+func WithTransports(transports ...Transport) ServerOption
+func WithShutdownTimeout(timeout time.Duration) ServerOption
+func WithWorkerCount(count uint32) ServerOption
+func WithWorkerQueueCapacity(capacity uint32) ServerOption
+func WithMaxFrameLength(length uint64) ServerOption
+```
+
+Both TCP and WebSocket are enabled by default, matching the current server behavior.
+`WithTransports` replaces `OnlyTCP` and `OnlyWebSocket`; an explicitly empty set is
+invalid, duplicate values are deduplicated, and unknown values are rejected. Port `0`
+is valid for either transport so the operating system can select an ephemeral port.
+The default shutdown timeout is 10 seconds. The default worker count is
+`runtime.GOMAXPROCS(0)`, the default per-worker queue capacity is 1024, and the default
+maximum frame length is 1 MiB. All are validated as positive values.
+
 `NewServer` validates configuration before returning. Validation includes transport
 selection, ports, WebSocket path, connection limits, connection group count, buffer
 sizes, heartbeat durations, frame limits, and worker counts and queue sizes. Enabling
-neither transport, enabling mutually exclusive transport options together, or using
-non-positive capacities is invalid.
+neither transport or using non-positive capacities is invalid.
+
+Scalar options, including worker count and queue capacity, are fixed at construction.
+Route, middleware, hook, and error-handler registration remains available while the
+server is in `new`; these mutating methods return `ErrServerRunning` after startup has
+been claimed and `ErrServerStopped` after termination. `Run` performs a final
+validation and freezes a routing snapshot before binding listeners.
 
 `Run` is synchronous. It binds all enabled listeners before publishing the running
 state. If any bind or server initialization fails, it closes resources already
 created and returns the startup error. After successful startup, it blocks until the
 server stops.
 
-Canceling the `Run` context is a normal stop request. It triggers the same shutdown
-sequence as `Shutdown`, using a configurable default shutdown timeout, and `Run`
-returns `nil` if cleanup completes. Unexpected listener or internal component failure
-causes shutdown and is returned from `Run` as a wrapped error.
+Canceling the `Run` context is a normal stop request. It triggers the same shared
+shutdown sequence as `Shutdown`. The sequence always uses the server's configured
+shutdown timeout; caller contexts only limit how long an individual `Shutdown` call
+waits for that sequence. `Run` returns `nil` if cleanup completes, or the shared
+shutdown error if forced cleanup was required. Unexpected listener or internal
+component failure causes shutdown and is returned from `Run` as a wrapped error. If
+that failure is followed by a shutdown failure, `Run` returns `errors.Join` of the
+runtime and shutdown errors so neither cause is lost.
 
 `Shutdown` is safe to call concurrently and repeatedly. All callers observe the same
 shutdown completion. A caller whose context expires returns its context error without
-corrupting the shared shutdown sequence. If graceful worker draining exceeds the
-server's shutdown deadline, remaining workers are canceled and the timeout is
-reported.
+canceling or replacing the shared shutdown sequence, which continues in the
+background. If graceful draining exceeds the configured server deadline, remaining
+workers and connections are force-canceled and the shared terminal result wraps
+`ErrShutdownTimeout`.
 
-The server has a single lifecycle:
+The server has a single lifecycle. `starting` is externally treated as running for
+error reporting:
 
 ```text
-new -> running -> stopping -> stopped
+new -> starting -> running -> stopping -> stopped
+             \-----------------> stopped  (startup rollback)
 ```
 
-Calling `Run` outside `new` returns `ErrServerRunning` or `ErrServerStopped` as
-appropriate. Calling `Shutdown` on a new or already stopped server succeeds without
-side effects.
+The first `Run` call atomically claims `new` before performing final validation or
+binding. Concurrent `Run` calls during `starting` or `running` return
+`ErrServerRunning`; calls after rollback or shutdown return `ErrServerStopped`.
+
+`Shutdown` on a new server succeeds without side effects. On a stopped server it
+returns the stored shutdown result, which is `nil` after normal cleanup and may wrap
+`ErrShutdownTimeout` after forced cleanup. During `starting`, it records a stop request
+and waits for startup to finish, subject only to the caller's wait context. Startup
+checks both the `Run` context and that stop request between resource-creation steps.
+If cancellation or shutdown is requested, startup rolls back every created resource,
+transitions to `stopped`, and `Run` returns `nil`. If startup itself fails, rollback
+also transitions to `stopped`, while `Run` returns the startup error and waiting
+`Shutdown` callers return `nil`; startup errors are not stored as shutdown results.
 
 The connection send API becomes context-aware:
 
@@ -100,10 +147,11 @@ type Connection interface {
 canceled, or the connection closes. A full write queue therefore applies bounded,
 caller-controlled backpressure instead of blocking forever.
 
-Worker-pool operations will return errors and accept contexts where waiting is
-possible. The built-in round-robin pool remains the supported default. Its interface
-may be revised as part of this breaking release so custom implementations do not rely
-on unexported methods.
+This round supports one task model: the built-in fixed-size round-robin worker pool.
+The exported custom `WorkerPool` interface and per-connection worker mode are removed.
+Worker count and per-worker queue capacity are constructor options. Removing the
+ambiguous extension surface keeps lifecycle and drain behavior consistent; a new
+public worker extension point can be designed separately if a concrete need appears.
 
 ## Server Ownership and Startup
 
@@ -127,36 +175,47 @@ transport while continuing to use the configured certificate and key files.
 
 Startup follows this sequence:
 
-1. Atomically transition from `new` into an internal starting state.
-2. Validate or initialize the worker pool.
-3. Bind every enabled listener.
-4. If any bind fails, close previous listeners and return the error.
-5. Publish the `running` state.
-6. Start accept and HTTP serving goroutines.
-7. Wait for context cancellation, an unexpected serving error, or shutdown.
+1. Atomically transition from `new` to `starting` and create `startupDone`.
+2. Freeze and validate routes, hooks, and runtime configuration.
+3. Initialize the built-in worker pool without starting intake.
+4. Check the `Run` context and pending shutdown request.
+5. Bind each enabled listener, checking for cancellation between binds.
+6. If validation, binding, cancellation, or a stop request occurs, close resources,
+   transition to `stopped`, and close `startupDone`.
+7. Publish `running`, start workers and serving goroutines, and close `startupDone`.
+8. Wait for context cancellation, an unexpected serving error, or shutdown.
 
 Normal listener-closed errors produced by shutdown are filtered and are not reported
 as runtime failures.
 
 ## Shutdown Sequence
 
-Shutdown has one owner and a completion channel observed by concurrent callers. The
-ordered sequence is:
+Shutdown has one owner and a completion channel observed by concurrent callers. It
+creates an internal timeout context from the configured shutdown duration. A caller's
+context controls only that caller's wait on the completion channel. The ordered
+sequence is:
 
 1. Transition from `running` to `stopping` and reject new task submissions.
 2. Close TCP and WebSocket listeners so no new connections are accepted.
-3. Snapshot and close all active connections.
-4. Wait for each connection reader, writer, and heartbeat goroutine to exit.
-5. Drain tasks already accepted by workers.
-6. Stop workers and wait for service goroutines.
-7. Transition to `stopped`, store the terminal result, and notify waiters.
+3. Snapshot active connections and quiesce their readers and heartbeat checkers while
+   keeping their writers available to already accepted handlers.
+4. Drain tasks already accepted by workers. Handlers may still call `Send` during
+   this phase, so accepted requests can finish their responses.
+5. Stop new sends, wait for sends already in progress, and drain each outgoing queue.
+6. Fully close connections and wait for connection supervisors to finish.
+7. Stop workers, wait for serving goroutines, transition to `stopped`, store the
+   terminal result, and notify waiters.
 
-Closing a socket is what releases blocked reads and writes. Connection manager
-shutdown must close actual connections; replacing its internal maps is not sufficient.
+Quiescing uses transport read deadlines to wake blocked TCP, TLS, and WebSocket reads
+without immediately closing the write side. Readers recognize the server's draining
+state and exit without initiating full connection closure. Final connection closure
+closes the socket to release any remaining blocked I/O. Connection manager shutdown
+must operate on actual connections; replacing its internal maps is not sufficient.
 
-If a shutdown deadline expires, the server cancels remaining workers, records the
-deadline error, and completes the transition to `stopped`. No server-owned goroutine
-is intentionally left running after shutdown completion.
+If the internal shutdown deadline expires at any phase, the server rejects sends,
+cancels remaining workers, force-closes every connection, records an
+`ErrShutdownTimeout` result, and completes the transition to `stopped`. No
+server-owned goroutine is intentionally left running after shutdown completion.
 
 ## Connection Concurrency Model
 
@@ -169,21 +228,37 @@ Each connection owns:
 - heartbeat checker
 - connection-level goroutine wait group
 - atomic last-active timestamp
-- atomic state `open`, `closing`, or `closed`
+- atomic state `open`, `draining`, `closing`, or `closed`
 - a `sync.Once` guarded close sequence
+- a completion channel owned by a connection supervisor
 
-The outgoing message queue is not closed. Both `Send` and the writer select on the
-connection context, eliminating the race between queue closure and concurrent sends.
-Once closing starts, new sends return `ErrConnectionClosed`.
+The outgoing message queue is not closed. Both `Send` and the writer observe a
+dedicated send gate, eliminating the race between queue closure and concurrent sends.
+`Send` is allowed in `open` and `draining`, because draining workers may still need to
+write responses. Once send draining or immediate close starts, new sends return
+`ErrConnectionClosed`; blocked sends are released by cancellation of the send gate.
 
-The connection close sequence is idempotent:
+The send gate tracks in-progress `Send` calls. Graceful shutdown first rejects new
+sends, releases blocked sends, waits for active send calls to finish, and only then
+asks the writer to drain the queue. The writer can therefore determine that no future
+enqueue is possible without closing the channel.
+
+Connection shutdown separates a non-blocking close request from finalization so a
+reader or writer never waits for itself. The close request is idempotent:
 
 1. Mark the connection `closing` so new work is rejected.
-2. Cancel the connection context and close the socket.
-3. Wait for reader, writer, and heartbeat goroutines.
-4. Remove the connection from the manager exactly once.
-5. Run the close hook exactly once.
-6. Mark the connection `closed`.
+2. Cancel read, heartbeat, and send activity and close the socket.
+3. Return immediately to the requesting goroutine.
+
+A separate connection supervisor, started with the connection, performs finalization:
+
+1. Wait for reader, writer, and heartbeat child goroutines.
+2. Remove the connection from the manager exactly once.
+3. Run the close hook exactly once.
+4. Mark the connection `closed` and close its completion channel.
+
+Server shutdown requests quiescing or closure and waits on the completion channel; it
+does not call a child-goroutine wait from inside that same connection child.
 
 The open hook runs once after the connection has been registered and its goroutines
 are ready. If the open hook panics, Ramix recovers, reports the error, and closes that
@@ -200,11 +275,12 @@ A connection is assigned deterministically to one worker for its lifetime, prese
 message order within that connection. Different connections may execute on different
 workers.
 
-Task submission does not block indefinitely. Submission returns one of:
+Task submission is internal and non-blocking. It attempts one immediate channel send
+and returns one of:
 
 - success when the task is queued
 - `ErrWorkerQueueFull` when capacity is exhausted
-- `ErrConnectionClosed` or a shutdown error when intake has stopped
+- `ErrServerStopping` when intake has stopped
 
 When the reader encounters `ErrWorkerQueueFull`, it reports the error and closes that
 connection. Continuing to read while dropping or reordering requests would leave the
@@ -214,8 +290,9 @@ During graceful shutdown, workers stop accepting new tasks, process tasks alread
 their queues, then exit. If the shutdown deadline expires, worker contexts are
 canceled and remaining queued work may be abandoned.
 
-The same behavior applies to the built-in shared pool and any per-connection worker
-mode retained by the implementation.
+The worker pool has only internal lifecycle methods. Public configuration is limited
+to worker count and queue capacity, avoiding partially compatible custom shutdown
+implementations in this round.
 
 ## Framing and Message Validation
 
@@ -257,7 +334,9 @@ detail:
 - `ErrConnectionClosed`
 - `ErrWorkerQueueFull`
 - `ErrServerRunning`
+- `ErrServerStopping`
 - `ErrServerStopped`
+- `ErrShutdownTimeout`
 
 Startup and server-level failures are returned from `NewServer`, `Run`, or `Shutdown`.
 Connection-level read, write, protocol, heartbeat, task, and hook failures are reported
@@ -318,6 +397,8 @@ Unit tests cover:
 
 - valid and invalid server configurations
 - all server state transitions and repeated lifecycle calls
+- concurrent `Run`, startup cancellation, and `Shutdown` during `starting`
+- caller wait cancellation without cancellation of the shared shutdown sequence
 - frame fragmentation, coalescing, invalid fields, oversized frames, and short input
 - message body-length mismatch
 - worker ordering, queue saturation, drain, cancellation, and repeated stop
@@ -339,6 +420,8 @@ server's internal listener, and use real `net.Conn` clients. Tests cover:
 - multiple frames in one write
 - oversized and malformed frames closing only the offending client
 - concurrent clients preserving per-connection order
+- an accepted handler completing its response while shutdown drains workers
+- forced cleanup when a handler exceeds the configured shutdown timeout
 - shutdown releasing listeners, clients, workers, and goroutines
 
 ### WebSocket Integration Tests
@@ -350,6 +433,7 @@ clients. Tests cover:
 - text message rejection
 - malformed binary frame rejection
 - ping/pong activity refresh
+- an accepted handler completing its response while shutdown drains workers
 - client cleanup and server shutdown
 
 ### Async Test Discipline
