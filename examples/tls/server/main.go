@@ -9,8 +9,8 @@ func main() {
 
 	server := ramix.NewServer(
 		ramix.WithPort(8899),
-		ramix.WithCertFile("./public_certificate.pem"),
-		ramix.WithPrivateKeyFile("./private_key.pem"),
+		ramix.WithCertFile("examples/tls/public_certificate.pem"),
+		ramix.WithPrivateKeyFile("examples/tls/private_key.pem"),
 	)
 
 	server.UseWorkerPool(ramix.NewRoundRobinWorkerPool(100, 1024))
