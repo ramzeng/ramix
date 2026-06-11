@@ -15,7 +15,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server.UseWorkerPool(ramix.NewRoundRobinWorkerPool(1000, 1024))
 	server.Use(ramix.Recovery(), ramix.Logger())
 
 	server.RegisterRoute(0, func(context *ramix.Context) {

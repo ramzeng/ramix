@@ -101,10 +101,5 @@ func (c *TCPConnection) close(syncConnectionManager bool) {
 		c.server.connectionManager.removeConnection(c)
 	}
 
-	// If the worker pool is not used, need to stop the worker by self
-	if !c.server.UsingWorkerPool() {
-		c.worker.stop()
-	}
-
 	debug("TCPConnection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
 }

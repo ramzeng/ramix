@@ -23,7 +23,7 @@ type Server struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	router              *router
-	workerPool          WorkerPool
+	workerPool          *workerPool
 	decoder             DecoderInterface
 	encoder             EncoderInterface
 	heartbeatChecker    *heartbeatChecker
@@ -33,9 +33,7 @@ type Server struct {
 }
 
 func (s *Server) Serve() {
-	if s.UsingWorkerPool() {
-		s.startWorkerPool()
-	}
+	s.startWorkerPool()
 
 	for _, transport := range s.Transports {
 		switch transport {
@@ -185,12 +183,16 @@ func (s *Server) monitor() {
 }
 
 func (s *Server) startWorkerPool() {
-	s.workerPool.init()
 	s.workerPool.start()
 }
 
 func (s *Server) stopWorkerPool() {
-	s.workerPool.stop()
+	drainCtx, cancel := context.WithTimeout(context.Background(), s.ShutdownTimeout)
+	defer cancel()
+
+	if err := s.workerPool.stopAcceptingAndDrain(drainCtx); err != nil {
+		debug("Worker pool drain error: %v", err)
+	}
 }
 
 func (s *Server) clearConnections() {
@@ -212,12 +214,6 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
 
-	if !s.UsingWorkerPool() {
-		w := newWorker(int(connectionID), s.WorkerQueueCapacity)
-		w.start()
-		c.worker = w
-	}
-
 	if s.heartbeatChecker != nil {
 		connection.heartbeatChecker = s.heartbeatChecker.clone(connection)
 	}
@@ -226,7 +222,7 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 
 	connection.open()
 
-	debug("WebSocketConnection %d opened, worker %d assigned", connection.ID(), connection.worker.id)
+	debug("WebSocketConnection %d opened", connection.ID())
 }
 
 func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
@@ -244,12 +240,6 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 
 	connection.ctx, connection.cancel = context.WithCancel(context.Background())
 
-	if !s.UsingWorkerPool() {
-		w := newWorker(int(connectionID), s.WorkerQueueCapacity)
-		w.start()
-		c.worker = w
-	}
-
 	if s.heartbeatChecker != nil {
 		connection.heartbeatChecker = s.heartbeatChecker.clone(connection)
 	}
@@ -262,7 +252,12 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 }
 
 func (s *Server) handleRequest(connection Connection, request *Request) {
-	ctx := newContext(connection, request)
+	parent := context.Background()
+	if provider, ok := connection.(interface{ taskContext() context.Context }); ok && provider.taskContext() != nil {
+		parent = provider.taskContext()
+	}
+
+	ctx := newContext(parent, connection, request)
 
 	if handlers, ok := s.router.routes[ctx.Request.Message.Event]; ok {
 		ctx.handlers = append(ctx.handlers, handlers...)
@@ -272,10 +267,9 @@ func (s *Server) handleRequest(connection Connection, request *Request) {
 		})
 	}
 
-	if s.UsingWorkerPool() {
-		s.workerPool.submitTask(ctx)
-	} else {
-		connection.submitTask(ctx)
+	if err := s.workerPool.submit(ctx); err != nil {
+		ctx.finish()
+		debug("Task submission failed for connection %d: %v", connection.ID(), err)
 	}
 }
 
@@ -285,14 +279,6 @@ func (s *Server) OnConnectionOpen(callback func(connection Connection)) {
 
 func (s *Server) OnConnectionClose(callback func(connection Connection)) {
 	s.connectionClose = callback
-}
-
-func (s *Server) UseWorkerPool(workerPool WorkerPool) {
-	s.workerPool = workerPool
-}
-
-func (s *Server) UsingWorkerPool() bool {
-	return s.workerPool != nil
 }
 
 func NewServer(serverOptions ...ServerOption) (*Server, error) {
@@ -333,6 +319,7 @@ func NewServer(serverOptions ...ServerOption) (*Server, error) {
 	server.routeGroup = newGroup(server.router)
 	server.connectionManager = newConnectionManager(server.ConnectionGroupsCount)
 	server.heartbeatChecker = newHeartbeatChecker(server.HeartbeatInterval, nil)
+	server.workerPool = newWorkerPool(server.WorkerCount, server.WorkerQueueCapacity)
 
 	return server, nil
 }

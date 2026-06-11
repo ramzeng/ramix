@@ -18,7 +18,6 @@ type Connection interface {
 	close(syncConnectionManager bool)
 	refreshLastActiveTime()
 	isAlive() bool
-	submitTask(ctx *Context)
 }
 
 type netConnection struct {
@@ -29,7 +28,6 @@ type netConnection struct {
 	messageChannel   chan []byte
 	lastActiveTime   time.Time
 	server           *Server
-	worker           *worker
 	heartbeatChecker *heartbeatChecker
 	frameDecoder     *FrameDecoder
 	lock             sync.RWMutex
@@ -43,12 +41,12 @@ func (c *netConnection) isAlive() bool {
 	return !c.isClosed && c.lastActiveTime.Add(c.server.HeartbeatTimeout).After(time.Now())
 }
 
-func (c *netConnection) submitTask(ctx *Context) {
-	c.worker.tasks <- ctx
-}
-
 func (c *netConnection) ID() uint64 {
 	return c.id
+}
+
+func (c *netConnection) taskContext() context.Context {
+	return c.ctx
 }
 
 func (c *netConnection) SendMessage(event uint32, body []byte) error {

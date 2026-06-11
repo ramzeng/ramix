@@ -3,6 +3,7 @@ package ramix
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -23,5 +24,27 @@ func TestDebug(t *testing.T) {
 
 	if strings.HasSuffix(DefaultWriter.(*bytes.Buffer).String(), "Hello, ramix") {
 		t.Error("debug() should write to DefaultWriter")
+	}
+}
+
+func TestDebugConcurrentWrites(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	DefaultWriter = buffer
+	SetMode(DebugMode)
+
+	var writers sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		writers.Add(1)
+		go func() {
+			defer writers.Done()
+			debug("Hello, %s", "ramix")
+		}()
+	}
+
+	writers.Wait()
+
+	output := buffer.String()
+	if count := strings.Count(output, "Hello, ramix\n"); count != 32 {
+		t.Fatalf("message count = %d, want 32", count)
 	}
 }
