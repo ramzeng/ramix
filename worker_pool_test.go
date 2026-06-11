@@ -14,15 +14,11 @@ type testConnection struct {
 	id uint64
 }
 
-func (c *testConnection) ID() uint64                       { return c.id }
-func (c *testConnection) RemoteAddress() net.Addr          { return nil }
-func (c *testConnection) SendMessage(uint32, []byte) error { return nil }
-func (c *testConnection) open()                            {}
-func (c *testConnection) writer()                          {}
-func (c *testConnection) reader()                          {}
-func (c *testConnection) close(bool)                       {}
-func (c *testConnection) refreshLastActiveTime()           {}
-func (c *testConnection) isAlive() bool                    { return true }
+func (c *testConnection) ID() uint64              { return c.id }
+func (c *testConnection) RemoteAddress() net.Addr { return nil }
+func (c *testConnection) Send(context.Context, uint32, []byte) error {
+	return nil
+}
 
 func TestWorkerPoolSameConnectionTasksExecuteInOrder(t *testing.T) {
 	pool := newWorkerPool(2, 2)

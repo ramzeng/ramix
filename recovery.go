@@ -29,7 +29,7 @@ func Recovery() Handler {
 			if err := recover(); err != nil {
 				log.Printf("%s\n\n", trace(fmt.Sprintf("%s", err)))
 				// TODO: config instead of hard code
-				_ = context.Connection.SendMessage(500, []byte("Server Error"))
+				_ = context.Connection.Send(context, 500, []byte("Server Error"))
 			}
 		}()
 

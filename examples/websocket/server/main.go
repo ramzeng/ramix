@@ -18,7 +18,7 @@ func main() {
 	server.Use(ramix.Recovery(), ramix.Logger())
 
 	server.RegisterRoute(0, func(context *ramix.Context) {
-		_ = context.Connection.SendMessage(context.Request.Message.Event, []byte("pong"))
+		_ = context.Connection.Send(context, context.Request.Message.Event, []byte("pong"))
 	})
 
 	server.Serve()

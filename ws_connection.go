@@ -1,9 +1,6 @@
 package ramix
 
-import (
-	"github.com/gorilla/websocket"
-	"net"
-)
+import "github.com/gorilla/websocket"
 
 type WebSocketConnection struct {
 	*netConnection
@@ -11,99 +8,38 @@ type WebSocketConnection struct {
 }
 
 func (c *WebSocketConnection) open() {
-	go c.reader()
-	go c.writer()
-	go c.heartbeatChecker.start()
-
-	if c.server.connectionOpen != nil {
-		c.server.connectionOpen(c)
-	}
-}
-
-func (c *WebSocketConnection) close(syncConnectionManager bool) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
-	if c.isClosed {
-		return
-	}
-
-	if c.server.connectionClose != nil {
-		c.server.connectionClose(c)
-	}
-
-	_ = c.socket.Close()
-
-	c.isClosed = true
-
-	c.cancel()
-	close(c.messageChannel)
-
-	c.heartbeatChecker.stop()
-
-	if syncConnectionManager {
-		c.server.connectionManager.removeConnection(c)
-	}
-
-	debug("WebSocketConnection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
-}
-
-func (c *WebSocketConnection) writer() {
-	for {
-		select {
-		case <-c.ctx.Done():
-			debug("WebSocketConnection %d writer stopped", c.ID())
-			return
-		case data := <-c.messageChannel:
-			_ = c.socket.WriteMessage(websocket.BinaryMessage, data)
-		}
-	}
+	c.netConnection.start(c, c.reader)
 }
 
 func (c *WebSocketConnection) reader() {
-	defer c.close(true)
-
 	for {
-		select {
-		case <-c.ctx.Done():
-			debug("WebSocketConnection %d reader stopped", c.ID())
+		messageType, buffer, err := c.socket.ReadMessage()
+		if err != nil {
+			if c.readCtx.Err() == nil && c.forceCtx.Err() == nil {
+				c.requestClose(OperationRead, err)
+			}
 			return
-		default:
-			messageType, buffer, err := c.socket.ReadMessage()
+		}
 
-			if messageType == websocket.PingMessage {
-				c.refreshLastActiveTime()
-				continue
-			}
+		if messageType == websocket.PingMessage || messageType == websocket.PongMessage {
+			c.refreshActivity()
+			continue
+		}
 
+		c.refreshActivity()
+		frames, err := c.frameDecoder.Decode(buffer)
+		if err != nil {
+			c.requestClose(OperationProtocol, err)
+			return
+		}
+
+		for _, frame := range frames {
+			message, err := c.server.decoder.Decode(frame)
 			if err != nil {
-				debug("WebSocket read error: %v", err)
+				c.requestClose(OperationProtocol, err)
 				return
 			}
-
-			c.refreshLastActiveTime()
-
-			bytesSlices, err := c.frameDecoder.Decode(buffer)
-			if err != nil {
-				debug("Frame decode error: %v", err)
-				return
-			}
-
-			for _, bytesSlice := range bytesSlices {
-
-				message, err := c.server.decoder.Decode(bytesSlice)
-
-				if err != nil {
-					debug("Message decode error: %v", err)
-					return
-				}
-
-				c.server.handleRequest(c, newRequest(message))
-			}
+			c.server.handleRequest(c, newRequest(message))
 		}
 	}
-}
-
-func (c *WebSocketConnection) RemoteAddress() net.Addr {
-	return c.socket.RemoteAddr()
 }

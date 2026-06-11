@@ -1,84 +1,118 @@
 package ramix
 
 import (
+	"context"
 	"sync"
 )
 
-func newConnectionManager(connectionGroupsCount int) *connectionManager {
-	connectionGroups := make([]*connectionGroup, connectionGroupsCount)
-
-	for step := 0; step < connectionGroupsCount; step++ {
-		connectionGroups[step] = &connectionGroup{
-			connections: make(map[uint64]Connection),
-		}
-	}
-
-	return &connectionManager{
-		connectionGroups: connectionGroups,
-	}
-}
-
 type connectionManager struct {
 	connectionGroups []*connectionGroup
-}
-
-func (cm *connectionManager) selectGroup(connection Connection) *connectionGroup {
-	return cm.connectionGroups[connection.ID()%uint64(len(cm.connectionGroups))]
-}
-
-func (cm *connectionManager) addConnection(connection Connection) {
-	cm.selectGroup(connection).addConnection(connection)
-}
-
-func (cm *connectionManager) removeConnection(connection Connection) {
-	cm.selectGroup(connection).removeConnection(connection)
-}
-
-func (cm *connectionManager) clearConnections() {
-	for _, group := range cm.connectionGroups {
-		group.clearConnections()
-	}
-}
-
-func (cm *connectionManager) connectionsCount() int {
-	connectionsCount := 0
-
-	for _, group := range cm.connectionGroups {
-		connectionsCount += group.connectionsCount()
-	}
-
-	return connectionsCount
+	finalizingMu     sync.RWMutex
+	finalizing       map[uint64]managedConnection
 }
 
 type connectionGroup struct {
-	connections map[uint64]Connection
+	connections map[uint64]managedConnection
 	lock        sync.RWMutex
 }
 
-func (cm *connectionGroup) addConnection(connection Connection) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
-
-	cm.connections[connection.ID()] = connection
+func newConnectionManager(connectionGroupsCount int) *connectionManager {
+	connectionGroups := make([]*connectionGroup, connectionGroupsCount)
+	for i := range connectionGroups {
+		connectionGroups[i] = &connectionGroup{
+			connections: make(map[uint64]managedConnection),
+		}
+	}
+	return &connectionManager{
+		connectionGroups: connectionGroups,
+		finalizing:       make(map[uint64]managedConnection),
+	}
 }
 
-func (cm *connectionGroup) removeConnection(connection Connection) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
-
-	delete(cm.connections, connection.ID())
+func (m *connectionManager) selectGroup(connection managedConnection) *connectionGroup {
+	return m.connectionGroups[connection.ID()%uint64(len(m.connectionGroups))]
 }
 
-func (cm *connectionGroup) clearConnections() {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
-
-	cm.connections = make(map[uint64]Connection)
+func (m *connectionManager) addConnection(connection managedConnection) {
+	group := m.selectGroup(connection)
+	group.lock.Lock()
+	group.connections[connection.ID()] = connection
+	group.lock.Unlock()
 }
 
-func (cm *connectionGroup) connectionsCount() int {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
+func (m *connectionManager) removeConnection(connection managedConnection) {
+	m.finalizingMu.Lock()
+	m.finalizing[connection.ID()] = connection
+	m.finalizingMu.Unlock()
 
-	return len(cm.connections)
+	group := m.selectGroup(connection)
+	group.lock.Lock()
+	delete(group.connections, connection.ID())
+	group.lock.Unlock()
+}
+
+func (m *connectionManager) markFinalized(connection managedConnection) {
+	m.finalizingMu.Lock()
+	delete(m.finalizing, connection.ID())
+	m.finalizingMu.Unlock()
+}
+
+func (m *connectionManager) connectionsCount() int {
+	total := 0
+	for _, group := range m.connectionGroups {
+		group.lock.RLock()
+		total += len(group.connections)
+		group.lock.RUnlock()
+	}
+	return total
+}
+
+func (m *connectionManager) snapshot() []managedConnection {
+	connections := make([]managedConnection, 0, m.connectionsCount())
+	for _, group := range m.connectionGroups {
+		group.lock.RLock()
+		for _, connection := range group.connections {
+			connections = append(connections, connection)
+		}
+		group.lock.RUnlock()
+	}
+	return connections
+}
+
+func (m *connectionManager) quiesceAll() []error {
+	var errs []error
+	for _, connection := range m.snapshot() {
+		if err := connection.quiesceReads(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+func (m *connectionManager) forceCloseAll() {
+	for _, connection := range m.snapshot() {
+		connection.requestClose(OperationRead, ErrServerStopping)
+	}
+}
+
+func (m *connectionManager) waitAll(ctx context.Context) error {
+	connections := m.snapshot()
+	connections = append(connections, m.finalizationSnapshot()...)
+	for _, connection := range connections {
+		if err := connection.wait(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *connectionManager) finalizationSnapshot() []managedConnection {
+	m.finalizingMu.RLock()
+	defer m.finalizingMu.RUnlock()
+
+	connections := make([]managedConnection, 0, len(m.finalizing))
+	for _, connection := range m.finalizing {
+		connections = append(connections, connection)
+	}
+	return connections
 }

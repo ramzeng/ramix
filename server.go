@@ -26,7 +26,6 @@ type Server struct {
 	workerPool          *workerPool
 	decoder             DecoderInterface
 	encoder             EncoderInterface
-	heartbeatChecker    *heartbeatChecker
 	connectionManager   *connectionManager
 	connectionOpen      func(connection Connection)
 	connectionClose     func(connection Connection)
@@ -196,11 +195,18 @@ func (s *Server) stopWorkerPool() {
 }
 
 func (s *Server) clearConnections() {
-	s.connectionManager.clearConnections()
+	s.connectionManager.forceCloseAll()
+	closeCtx, cancel := context.WithTimeout(context.Background(), s.ShutdownTimeout)
+	defer cancel()
+	if err := s.connectionManager.waitAll(closeCtx); err != nil {
+		debug("Connection shutdown error: %v", err)
+	}
 }
 
 func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID uint64) {
-	c, err := newNetConnection(connectionID, s)
+	c, err := newNetConnection(connectionID, s, socket, func(data []byte) error {
+		return socket.WriteMessage(websocket.BinaryMessage, data)
+	})
 	if err != nil {
 		debug("Frame decoder construction error: %v", err)
 		_ = socket.Close()
@@ -212,12 +218,6 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 		netConnection: c,
 	}
 
-	connection.ctx, connection.cancel = context.WithCancel(context.Background())
-
-	if s.heartbeatChecker != nil {
-		connection.heartbeatChecker = s.heartbeatChecker.clone(connection)
-	}
-
 	s.connectionManager.addConnection(connection)
 
 	connection.open()
@@ -226,7 +226,10 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 }
 
 func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
-	c, err := newNetConnection(connectionID, s)
+	c, err := newNetConnection(connectionID, s, socket, func(data []byte) error {
+		_, err := socket.Write(data)
+		return err
+	})
 	if err != nil {
 		debug("Frame decoder construction error: %v", err)
 		_ = socket.Close()
@@ -236,12 +239,6 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 	connection := &TCPConnection{
 		socket:        socket,
 		netConnection: c,
-	}
-
-	connection.ctx, connection.cancel = context.WithCancel(context.Background())
-
-	if s.heartbeatChecker != nil {
-		connection.heartbeatChecker = s.heartbeatChecker.clone(connection)
 	}
 
 	s.connectionManager.addConnection(connection)
@@ -263,7 +260,7 @@ func (s *Server) handleRequest(connection Connection, request *Request) {
 		ctx.handlers = append(ctx.handlers, handlers...)
 	} else {
 		ctx.handlers = append(ctx.handlers, func(context *Context) {
-			_ = context.Connection.SendMessage(404, []byte("Event Not Found"))
+			_ = context.Connection.Send(context, 404, []byte("Event Not Found"))
 		})
 	}
 
@@ -318,7 +315,6 @@ func NewServer(serverOptions ...ServerOption) (*Server, error) {
 	server.router = newRouter()
 	server.routeGroup = newGroup(server.router)
 	server.connectionManager = newConnectionManager(server.ConnectionGroupsCount)
-	server.heartbeatChecker = newHeartbeatChecker(server.HeartbeatInterval, nil)
 	server.workerPool = newWorkerPool(server.WorkerCount, server.WorkerQueueCapacity)
 
 	return server, nil
