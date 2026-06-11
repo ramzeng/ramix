@@ -29,6 +29,7 @@ type Server struct {
 	connectionManager   *connectionManager
 	connectionOpen      func(connection Connection)
 	connectionClose     func(connection Connection)
+	connectionError     ConnectionErrorHandler
 }
 
 func (s *Server) Serve() {
@@ -227,8 +228,7 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 
 func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 	c, err := newNetConnection(connectionID, s, socket, func(data []byte) error {
-		_, err := socket.Write(data)
-		return err
+		return writeFull(socket, data)
 	})
 	if err != nil {
 		debug("Frame decoder construction error: %v", err)
@@ -248,7 +248,7 @@ func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
 	debug("TCPConnection %d opened", connection.ID())
 }
 
-func (s *Server) handleRequest(connection Connection, request *Request) {
+func (s *Server) handleRequest(connection Connection, request *Request) error {
 	parent := context.Background()
 	if provider, ok := connection.(interface{ taskContext() context.Context }); ok && provider.taskContext() != nil {
 		parent = provider.taskContext()
@@ -267,7 +267,20 @@ func (s *Server) handleRequest(connection Connection, request *Request) {
 	if err := s.workerPool.submit(ctx); err != nil {
 		ctx.finish()
 		debug("Task submission failed for connection %d: %v", connection.ID(), err)
+		return err
 	}
+	return nil
+}
+
+func (s *Server) reportConnectionError(connection Connection, operation ConnectionOperation, err error) {
+	if err == nil {
+		return
+	}
+	if s.connectionError != nil {
+		s.connectionError(connection, operation, err)
+		return
+	}
+	debug("Connection %d %s error: %v", connection.ID(), operation, err)
 }
 
 func (s *Server) OnConnectionOpen(callback func(connection Connection)) {

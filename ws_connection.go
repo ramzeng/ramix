@@ -39,7 +39,7 @@ func (c *WebSocketConnection) reader() {
 				c.requestClose(OperationProtocol, err)
 				return
 			}
-			c.server.handleRequest(c, newRequest(message))
+			_ = c.server.handleRequest(c, newRequest(message))
 		}
 	}
 }

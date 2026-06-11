@@ -215,7 +215,9 @@ func (c *netConnection) runWriter() {
 			return
 		case data := <-c.outgoing:
 			if err := c.writeMessage(data); err != nil {
-				c.requestClose(OperationWrite, err)
+				if c.tryRequestClose(OperationWrite, err) {
+					c.server.reportConnectionError(c.self, OperationWrite, err)
+				}
 				return
 			}
 		case <-c.drainWriter:
@@ -223,7 +225,9 @@ func (c *netConnection) runWriter() {
 				select {
 				case data := <-c.outgoing:
 					if err := c.writeMessage(data); err != nil {
-						c.requestClose(OperationWrite, err)
+						if c.tryRequestClose(OperationWrite, err) {
+							c.server.reportConnectionError(c.self, OperationWrite, err)
+						}
 						return
 					}
 				default:
@@ -281,19 +285,23 @@ func (c *netConnection) stopSendsAndDrain(ctx context.Context) error {
 }
 
 func (c *netConnection) requestClose(op ConnectionOperation, err error) {
-	c.requestCloseMatching(op, err, false)
+	c.tryRequestClose(op, err)
 }
 
 func (c *netConnection) requestCloseIfOpen(op ConnectionOperation, err error) {
 	c.requestCloseMatching(op, err, true)
 }
 
-func (c *netConnection) requestCloseMatching(op ConnectionOperation, err error, onlyOpen bool) {
+func (c *netConnection) tryRequestClose(op ConnectionOperation, err error) bool {
+	return c.requestCloseMatching(op, err, false)
+}
+
+func (c *netConnection) requestCloseMatching(op ConnectionOperation, err error, onlyOpen bool) bool {
 	c.stateMu.Lock()
 	state := c.connectionState()
 	if state == connectionClosed || state == connectionClosing || onlyOpen && state != connectionOpen {
 		c.stateMu.Unlock()
-		return
+		return false
 	}
 	c.state.Store(uint32(connectionClosing))
 	c.stateMu.Unlock()
@@ -313,6 +321,7 @@ func (c *netConnection) requestCloseMatching(op ConnectionOperation, err error, 
 		c.forceCancel()
 		c.closeTransport()
 	})
+	return true
 }
 
 func (c *netConnection) supervise(openHookDone <-chan struct{}) {
