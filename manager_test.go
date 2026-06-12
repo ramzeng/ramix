@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type managedConnectionStub struct {
@@ -17,11 +18,13 @@ type managedConnectionStub struct {
 	quiesceCount atomic.Int32
 	closeCount   atomic.Int32
 	waitDone     chan struct{}
+	waitEntered  chan struct{}
 	closeOnce    sync.Once
+	waitOnce     sync.Once
 }
 
 func newManagedConnectionStub(id uint64) *managedConnectionStub {
-	return &managedConnectionStub{id: id, waitDone: make(chan struct{})}
+	return &managedConnectionStub{id: id, waitDone: make(chan struct{}), waitEntered: make(chan struct{})}
 }
 
 func (c *managedConnectionStub) ID() uint64              { return c.id }
@@ -39,6 +42,7 @@ func (c *managedConnectionStub) requestClose(ConnectionOperation, error) {
 	c.closeOnce.Do(func() { close(c.waitDone) })
 }
 func (c *managedConnectionStub) wait(ctx context.Context) error {
+	c.waitOnce.Do(func() { close(c.waitEntered) })
 	select {
 	case <-c.waitDone:
 		return nil
@@ -138,11 +142,28 @@ func TestConnectionManagerWaitAllIncludesFinalizingConnections(t *testing.T) {
 		t.Fatalf("waitAll() for finalizing connection error = %v, want %v", err, context.Canceled)
 	}
 
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- manager.waitAll(context.Background()) }()
+	select {
+	case <-connection.waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for waitAll() to observe finalizing connection")
+	}
 	connection.requestClose(OperationRead, net.ErrClosed)
-	if err := manager.waitAll(context.Background()); err != nil {
-		t.Fatalf("waitAll() after finalization error = %v", err)
+	select {
+	case err := <-waitDone:
+		t.Fatalf("waitAll() returned before finalization removal: %v", err)
+	case <-time.After(20 * time.Millisecond):
 	}
 	manager.markFinalized(connection)
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("waitAll() after finalization error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for finalization removal")
+	}
 	if got := len(manager.finalizationSnapshot()); got != 0 {
 		t.Fatalf("finalizing connection count = %d, want 0", got)
 	}

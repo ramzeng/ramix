@@ -9,6 +9,7 @@ type connectionManager struct {
 	connectionGroups []*connectionGroup
 	finalizingMu     sync.RWMutex
 	finalizing       map[uint64]managedConnection
+	finalizingChange chan struct{}
 }
 
 type connectionGroup struct {
@@ -26,6 +27,7 @@ func newConnectionManager(connectionGroupsCount int) *connectionManager {
 	return &connectionManager{
 		connectionGroups: connectionGroups,
 		finalizing:       make(map[uint64]managedConnection),
+		finalizingChange: make(chan struct{}),
 	}
 }
 
@@ -54,6 +56,8 @@ func (m *connectionManager) removeConnection(connection managedConnection) {
 func (m *connectionManager) markFinalized(connection managedConnection) {
 	m.finalizingMu.Lock()
 	delete(m.finalizing, connection.ID())
+	close(m.finalizingChange)
+	m.finalizingChange = make(chan struct{})
 	m.finalizingMu.Unlock()
 }
 
@@ -96,17 +100,37 @@ func (m *connectionManager) forceCloseAll() {
 }
 
 func (m *connectionManager) waitAll(ctx context.Context) error {
-	connections := m.snapshot()
-	connections = append(connections, m.finalizationSnapshot()...)
-	for _, connection := range connections {
-		if err := connection.wait(ctx); err != nil {
-			return err
+	for {
+		connections := m.snapshot()
+		finalizing, finalizingChange := m.finalizationState()
+		connections = append(connections, finalizing...)
+		if len(connections) == 0 {
+			return nil
+		}
+		for _, connection := range connections {
+			if err := connection.wait(ctx); err != nil {
+				return err
+			}
+		}
+
+		finalizing, finalizingChange = m.finalizationState()
+		if len(finalizing) == 0 {
+			return nil
+		}
+		select {
+		case <-finalizingChange:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	return nil
 }
 
 func (m *connectionManager) finalizationSnapshot() []managedConnection {
+	connections, _ := m.finalizationState()
+	return connections
+}
+
+func (m *connectionManager) finalizationState() ([]managedConnection, <-chan struct{}) {
 	m.finalizingMu.RLock()
 	defer m.finalizingMu.RUnlock()
 
@@ -114,5 +138,5 @@ func (m *connectionManager) finalizationSnapshot() []managedConnection {
 	for _, connection := range m.finalizing {
 		connections = append(connections, connection)
 	}
-	return connections
+	return connections, m.finalizingChange
 }

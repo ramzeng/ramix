@@ -20,11 +20,39 @@ type integrationError struct {
 	err       error
 }
 
+type integrationServerRun struct {
+	done chan struct{}
+	mu   sync.Mutex
+	err  error
+}
+
+func (r *integrationServerRun) setResult(err error) {
+	r.mu.Lock()
+	r.err = err
+	r.mu.Unlock()
+}
+
+func (r *integrationServerRun) result() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
+}
+
 func startIntegrationServer(t *testing.T, server *Server, transport Transport) net.Addr {
 	t.Helper()
-	runCtx, cancelRun := context.WithCancel(context.Background())
-	runDone := make(chan struct{})
-	var runErr error
+	address, _ := startIntegrationServerWithContext(t, server, transport, context.Background())
+	return address
+}
+
+func startIntegrationServerWithContext(
+	t *testing.T,
+	server *Server,
+	transport Transport,
+	ctx context.Context,
+) (net.Addr, *integrationServerRun) {
+	t.Helper()
+	runCtx, cancelRun := context.WithCancel(ctx)
+	run := &integrationServerRun{done: make(chan struct{})}
 	t.Cleanup(func() {
 		cancelRun()
 		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), integrationTimeout)
@@ -33,17 +61,17 @@ func startIntegrationServer(t *testing.T, server *Server, transport Transport) n
 			t.Errorf("Shutdown() error = %v", err)
 		}
 		select {
-		case <-runDone:
-			if runErr != nil {
-				t.Errorf("Run() error = %v", runErr)
+		case <-run.done:
+			if err := run.result(); err != nil {
+				t.Errorf("Run() error = %v", err)
 			}
 		case <-shutdownCtx.Done():
 			t.Errorf("Run() did not return after shutdown: %v", shutdownCtx.Err())
 		}
 	})
 	go func() {
-		runErr = server.Run(runCtx)
-		close(runDone)
+		run.setResult(server.Run(runCtx))
+		close(run.done)
 	}()
 
 	deadline := time.NewTimer(integrationTimeout)
@@ -53,8 +81,8 @@ func startIntegrationServer(t *testing.T, server *Server, transport Transport) n
 
 	for {
 		select {
-		case <-runDone:
-			t.Fatalf("Run() returned before readiness: %v", runErr)
+		case <-run.done:
+			t.Fatalf("Run() returned before readiness: %v", run.result())
 		case <-ticker.C:
 			if server.currentState() != stateRunning {
 				continue
@@ -63,10 +91,84 @@ func startIntegrationServer(t *testing.T, server *Server, transport Transport) n
 			if address == nil {
 				continue
 			}
-			return address
+			return address, run
 		case <-deadline.C:
 			t.Fatalf("server did not reach running state within %s", integrationTimeout)
 		}
+	}
+}
+
+func waitForIntegrationRun(t *testing.T, run *integrationServerRun) error {
+	t.Helper()
+	select {
+	case <-run.done:
+		return run.result()
+	case <-time.After(integrationTimeout):
+		t.Fatal("timed out waiting for Run() completion")
+		return nil
+	}
+}
+
+func waitForIntegrationShutdown(t *testing.T, shutdownDone <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-shutdownDone:
+		return err
+	case <-time.After(integrationTimeout):
+		t.Fatal("timed out waiting for Shutdown() completion")
+		return nil
+	}
+}
+
+func waitForIntegrationResult(t *testing.T, results <-chan error, label string) error {
+	t.Helper()
+	select {
+	case err := <-results:
+		return err
+	case <-time.After(integrationTimeout):
+		t.Fatalf("timed out waiting for %s", label)
+		return nil
+	}
+}
+
+func waitForTCPListenerClosed(t *testing.T, address string) {
+	t.Helper()
+	deadline := time.Now().Add(integrationTimeout)
+	for time.Now().Before(deadline) {
+		connection, err := net.DialTimeout("tcp", address, 50*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = connection.Close()
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("TCP listener continued accepting connections during shutdown")
+}
+
+func assertIntegrationShutdownInvariants(t *testing.T, server *Server) {
+	t.Helper()
+	if got := server.connectionManager.connectionsCount(); got != 0 {
+		t.Fatalf("connection registry count = %d, want 0", got)
+	}
+	if got := len(server.connectionManager.finalizationSnapshot()); got != 0 {
+		t.Fatalf("finalizing connection count = %d, want 0", got)
+	}
+	for index, worker := range server.workerPool.workers {
+		select {
+		case <-worker.done:
+		default:
+			t.Fatalf("worker %d completion channel remains open", index)
+		}
+	}
+	servicesDone := make(chan struct{})
+	go func() {
+		server.serviceWG.Wait()
+		close(servicesDone)
+	}()
+	select {
+	case <-servicesDone:
+	case <-time.After(integrationTimeout):
+		t.Fatal("serving goroutines did not finish")
 	}
 }
 
@@ -359,6 +461,62 @@ func TestIntegration_TCPTLSRequestResponse(t *testing.T) {
 		t.Fatalf("readIntegrationMessage() error = %v", err)
 	}
 	assertIntegrationMessage(t, response, 107, "echo:secure")
+}
+
+func TestIntegration_TCPShutdownDrainsAcceptedResponse(t *testing.T) {
+	server := newTCPIntegrationServer(t, WithShutdownTimeout(time.Second))
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseHandler) }) }
+	sendDone := make(chan error, 1)
+	if err := server.RegisterRoute(8, func(ctx *Context) {
+		close(handlerStarted)
+		<-releaseHandler
+		sendDone <- ctx.Connection.Send(ctx, 108, []byte("drained"))
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
+	address, run := startIntegrationServerWithContext(t, server, TransportTCP, context.Background())
+	// Registered after server cleanup so LIFO cleanup releases the handler first.
+	t.Cleanup(release)
+	client := dialTCPIntegration(t, address)
+	setIntegrationDeadline(t, client)
+	if _, err := client.Write(encodeIntegrationMessage(t, 8, "request")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	select {
+	case <-handlerStarted:
+	case <-time.After(integrationTimeout):
+		t.Fatal("handler did not start")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- server.Shutdown(context.Background()) }()
+	waitForServerState(t, server, stateStopping)
+	waitForTCPListenerClosed(t, address.String())
+	release()
+	response, err := readIntegrationMessage(client)
+	if err != nil {
+		t.Fatalf("read drained response error = %v", err)
+	}
+	assertIntegrationMessage(t, response, 108, "drained")
+	if err := waitForIntegrationResult(t, sendDone, "handler Send()"); err != nil {
+		t.Fatalf("handler Send() error = %v", err)
+	}
+	if err := waitForIntegrationShutdown(t, shutdownDone); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if err := waitForIntegrationRun(t, run); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(integrationTimeout)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	buffer := make([]byte, 1)
+	_, err = client.Read(buffer)
+	assertIntegrationConnectionClosed(t, err)
+	assertIntegrationShutdownInvariants(t, server)
 }
 
 func waitForIntegrationError(t *testing.T, errorsCh <-chan integrationError) integrationError {

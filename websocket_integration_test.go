@@ -1,6 +1,7 @@
 package ramix
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -70,6 +71,24 @@ func readWebSocketIntegrationMessage(connection *websocket.Conn) (Message, error
 		return Message{}, fmt.Errorf("message type = %d, want binary", messageType)
 	}
 	return (&Decoder{}).Decode(payload)
+}
+
+func waitForWebSocketListenerClosed(t *testing.T, rawURL string) {
+	t.Helper()
+	deadline := time.Now().Add(integrationTimeout)
+	for time.Now().Before(deadline) {
+		dialer := websocket.Dialer{HandshakeTimeout: 50 * time.Millisecond}
+		connection, response, err := dialer.Dial(rawURL, http.Header{})
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		if err != nil {
+			return
+		}
+		_ = connection.Close()
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("WebSocket listener continued accepting connections during shutdown")
 }
 
 func TestIntegration_WebSocketRequestResponse(t *testing.T) {
@@ -195,6 +214,61 @@ func TestIntegration_WebSocketTLSRequestResponse(t *testing.T) {
 		t.Fatalf("readWebSocketIntegrationMessage() error = %v", err)
 	}
 	assertIntegrationMessage(t, response, 115, "echo:secure")
+}
+
+func TestIntegration_WebSocketShutdownDrainsAcceptedResponse(t *testing.T) {
+	server := newWebSocketIntegrationServer(t, WithShutdownTimeout(time.Second))
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseHandler) }) }
+	sendDone := make(chan error, 1)
+	if err := server.RegisterRoute(18, func(ctx *Context) {
+		close(handlerStarted)
+		<-releaseHandler
+		sendDone <- ctx.Connection.Send(ctx, 118, []byte("drained"))
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
+	address, run := startIntegrationServerWithContext(t, server, TransportWebSocket, context.Background())
+	// Registered after server cleanup so LIFO cleanup releases the handler first.
+	t.Cleanup(release)
+	rawURL := webSocketIntegrationURL(server, address.String(), false)
+	client := dialWebSocketIntegration(t, nil, rawURL)
+	if err := client.WriteMessage(websocket.BinaryMessage, encodeIntegrationMessage(t, 18, "request")); err != nil {
+		t.Fatalf("WriteMessage() error = %v", err)
+	}
+	select {
+	case <-handlerStarted:
+	case <-time.After(integrationTimeout):
+		t.Fatal("handler did not start")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- server.Shutdown(context.Background()) }()
+	waitForServerState(t, server, stateStopping)
+	waitForWebSocketListenerClosed(t, rawURL)
+	release()
+	drained, err := readWebSocketIntegrationMessage(client)
+	if err != nil {
+		t.Fatalf("read drained response error = %v", err)
+	}
+	assertIntegrationMessage(t, drained, 118, "drained")
+	if err := waitForIntegrationResult(t, sendDone, "handler Send()"); err != nil {
+		t.Fatalf("handler Send() error = %v", err)
+	}
+	if err := waitForIntegrationShutdown(t, shutdownDone); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if err := waitForIntegrationRun(t, run); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(integrationTimeout)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	_, _, err = client.ReadMessage()
+	assertIntegrationConnectionClosed(t, err)
+	assertIntegrationShutdownInvariants(t, server)
 }
 
 func TestIntegration_WebSocketWorkerQueueSaturationIsIsolated(t *testing.T) {
