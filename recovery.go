@@ -17,7 +17,7 @@ func trace(message string) string {
 	for _, pc := range pcs[:n] {
 		fn := runtime.FuncForPC(pc)
 		file, line := fn.FileLine(pc)
-		str.WriteString(fmt.Sprintf("\n\t%s:%d", file, line))
+		_, _ = fmt.Fprintf(&str, "\n\t%s:%d", file, line)
 	}
 
 	return str.String()
@@ -29,7 +29,7 @@ func Recovery() Handler {
 			if err := recover(); err != nil {
 				log.Printf("%s\n\n", trace(fmt.Sprintf("%s", err)))
 				// TODO: config instead of hard code
-				_ = context.Connection.SendMessage(500, []byte("Server Error"))
+				_ = context.Connection.Send(context, 500, []byte("Server Error"))
 			}
 		}()
 

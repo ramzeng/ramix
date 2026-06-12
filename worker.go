@@ -1,49 +1,44 @@
 package ramix
 
-import "context"
-
 type worker struct {
-	id     int
-	tasks  chan *Context
-	ctx    context.Context
-	cancel context.CancelFunc
+	id    int
+	tasks chan *Context
+	pool  *workerPool
+	done  chan struct{}
 }
 
 func (w *worker) start() {
 	go func() {
-		for {
-			select {
-			// if server use worker pool, this context is the server's context
-			// else, this context is the connection's context
-			case <-w.ctx.Done():
-				debug("Worker %d stopped", w.id)
-				return
-			case ctx := <-w.tasks:
-				// If the context is nil, it means the worker is stopped
-				if ctx == nil {
-					debug("Worker %d stopped", w.id)
+		defer close(w.done)
+
+		for task := range w.tasks {
+			if task == nil {
+				continue
+			}
+
+			func() {
+				defer task.finish()
+				defer w.pool.unregister(task)
+
+				if task.Err() != nil {
 					return
 				}
-				ctx.Next()
-			}
+
+				task.Next()
+			}()
 		}
+
+		debug("Worker %d stopped", w.id)
 	}()
 
 	debug("Worker %d started", w.id)
 }
 
-func (w *worker) stop() {
-	w.cancel()
-	close(w.tasks)
-}
-
-func newWorker(workerID int, maxTasksCount uint32) *worker {
-	w := &worker{
+func newWorker(workerID int, maxTasksCount uint32, pool *workerPool) *worker {
+	return &worker{
 		id:    workerID,
 		tasks: make(chan *Context, maxTasksCount),
+		pool:  pool,
+		done:  make(chan struct{}),
 	}
-
-	w.ctx, w.cancel = context.WithCancel(context.Background())
-
-	return w
 }
