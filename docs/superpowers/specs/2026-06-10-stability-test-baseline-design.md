@@ -68,7 +68,7 @@ func WithTransports(transports ...Transport) ServerOption
 func WithShutdownTimeout(timeout time.Duration) ServerOption
 func WithWorkerCount(count uint32) ServerOption
 func WithWorkerQueueCapacity(capacity uint32) ServerOption
-func WithMaxFrameLength(length uint64) ServerOption
+func WithServerMaxFrameLength(length uint64) ServerOption
 ```
 
 Both TCP and WebSocket are enabled by default, matching the current server behavior.
@@ -182,8 +182,10 @@ Startup follows this sequence:
 5. Bind each enabled listener, checking for cancellation between binds.
 6. If validation, binding, cancellation, or a stop request occurs, close resources,
    transition to `stopped`, and close `startupDone`.
-7. Publish `running`, start workers and serving goroutines, and close `startupDone`.
-8. Wait for context cancellation, an unexpected serving error, or shutdown.
+7. Start workers and transport-serving goroutines behind a closed startup gate.
+8. Publish `running`, open the startup gate, and close `startupDone` so no connection
+   can be accepted while the externally visible state is still `starting`.
+9. Wait for context cancellation, an unexpected serving error, or shutdown.
 
 Normal listener-closed errors produced by shutdown are filtered and are not reported
 as runtime failures.
@@ -213,9 +215,10 @@ closes the socket to release any remaining blocked I/O. Connection manager shutd
 must operate on actual connections; replacing its internal maps is not sufficient.
 
 If the internal shutdown deadline expires at any phase, the server rejects sends,
-cancels remaining workers, force-closes every connection, records an
-`ErrShutdownTimeout` result, and completes the transition to `stopped`. No
-server-owned goroutine is intentionally left running after shutdown completion.
+cancels remaining task contexts, force-closes every connection, records an
+`ErrShutdownTimeout` result, and completes the transition to `stopped`. Framework
+goroutines exit after their owned resources are released; a currently executing
+application handler can outlive shutdown only if it ignores its canceled task context.
 
 ## Connection Concurrency Model
 
@@ -288,7 +291,15 @@ application protocol in an undefined state.
 
 During graceful shutdown, workers stop accepting new tasks, process tasks already in
 their queues, then exit. If the shutdown deadline expires, worker contexts are
-canceled and remaining queued work may be abandoned.
+canceled and remaining queued work may be abandoned. Each Ramix `Context` exposes a
+task cancellation signal derived from its connection and worker. Handlers that perform
+blocking work are expected to observe that signal.
+
+Go cannot forcibly terminate an arbitrary handler goroutine. After a shutdown timeout,
+Ramix cancels task contexts, force-closes transport resources, and returns
+`ErrShutdownTimeout`; a handler that ignores cancellation and never returns may keep
+its worker goroutine alive. This is treated as non-cooperative application code rather
+than a framework-cleanup guarantee.
 
 The worker pool has only internal lifecycle methods. Public configuration is limited
 to worker count and queue capacity, avoiding partially compatible custom shutdown
@@ -402,6 +413,7 @@ Unit tests cover:
 - frame fragmentation, coalescing, invalid fields, oversized frames, and short input
 - message body-length mismatch
 - worker ordering, queue saturation, drain, cancellation, and repeated stop
+- task context cancellation reaching a cooperative blocking handler
 - concurrent connection close and send
 - close-after-send and send-after-close behavior
 - hook and error-callback panic recovery
@@ -422,6 +434,7 @@ server's internal listener, and use real `net.Conn` clients. Tests cover:
 - concurrent clients preserving per-connection order
 - an accepted handler completing its response while shutdown drains workers
 - forced cleanup when a handler exceeds the configured shutdown timeout
+- a non-cooperative handler causing `ErrShutdownTimeout` without blocking `Run`
 - shutdown releasing listeners, clients, workers, and goroutines
 
 ### WebSocket Integration Tests

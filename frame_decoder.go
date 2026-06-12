@@ -1,7 +1,6 @@
 package ramix
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -64,20 +63,26 @@ func WithInitialBytesToStrip(initialBytesToStrip int) FrameDecoderOption {
 	}
 }
 
-func NewFrameDecoder(options ...FrameDecoderOption) *FrameDecoder {
+func NewFrameDecoder(options ...FrameDecoderOption) (*FrameDecoder, error) {
 	frameDecoderOptions := defaultFrameDecoderOptions
 
 	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("%w: frame decoder option must not be nil", ErrInvalidConfiguration)
+		}
 		option(&frameDecoderOptions)
 	}
 
 	frameDecoder := &FrameDecoder{
 		FrameDecoderOptions: frameDecoderOptions,
 	}
-
 	frameDecoder.lengthFieldEndOffset = frameDecoder.LengthFieldOffset + frameDecoder.LengthFieldLength
 
-	return frameDecoder
+	if err := frameDecoder.validateConfiguration(); err != nil {
+		return nil, err
+	}
+
+	return frameDecoder, nil
 }
 
 // FrameDecoder
@@ -86,180 +91,205 @@ type FrameDecoder struct {
 	FrameDecoderOptions
 
 	lengthFieldEndOffset int
-
-	failFast               bool
-	discardingTooLongFrame bool
-	tooLongFrameLength     int64
-	bytesToDiscard         int64
-	bytes                  []byte
-	lock                   sync.Mutex
+	bytes                []byte
+	lock                 sync.Mutex
 }
 
-func (d *FrameDecoder) fail(frameLength int64) {
-	if frameLength > 0 {
-		panic(fmt.Sprintf("Adjusted frame length exceeds %d : %d - discarded", d.MaxFrameLength, frameLength))
+func (d *FrameDecoder) validateConfiguration() error {
+	if d.ByteOrder == nil {
+		return fmt.Errorf("%w: byte order must not be nil", ErrInvalidConfiguration)
 	}
 
-	panic(fmt.Sprintf("Adjusted frame length exceeds %d - discarded", d.MaxFrameLength))
-}
-
-func (d *FrameDecoder) discardingTooLongFrames(buffer *bytes.Buffer) {
-	bytesToDiscard := d.bytesToDiscard
-
-	localBytesToDiscard := math.Min(float64(bytesToDiscard), float64(buffer.Len()))
-
-	buffer.Next(int(localBytesToDiscard))
-
-	bytesToDiscard -= int64(localBytesToDiscard)
-
-	d.bytesToDiscard = bytesToDiscard
-	d.failIfNecessary(false)
-}
-
-func (d *FrameDecoder) getUnadjustedFrameLength(inputBuffer *bytes.Buffer, offset int, length int, order binary.ByteOrder) int64 {
-	var frameLength int64
-
-	bytesSlice := inputBuffer.Bytes()[offset : offset+length]
-	buffer := bytes.NewBuffer(bytesSlice)
-
-	switch length {
-	case 1:
-		var value uint8
-		_ = binary.Read(buffer, order, &value)
-		frameLength = int64(value)
-	case 2:
-		var value uint16
-		_ = binary.Read(buffer, order, &value)
-		frameLength = int64(value)
-	case 3:
-		if order == binary.LittleEndian {
-			n := uint(bytesSlice[0]) | uint(bytesSlice[1])<<8 | uint(bytesSlice[2])<<16
-			frameLength = int64(n)
-		} else {
-			n := uint(bytesSlice[2]) | uint(bytesSlice[1])<<8 | uint(bytesSlice[0])<<16
-			frameLength = int64(n)
-		}
-	case 4:
-		var value uint32
-		_ = binary.Read(buffer, order, &value)
-		frameLength = int64(value)
-	case 8:
-		_ = binary.Read(buffer, order, &frameLength)
+	switch d.LengthFieldLength {
+	case 1, 2, 3, 4, 8:
 	default:
-		panic(fmt.Sprintf("unsupported LengthFieldLength: %d (expected: 1, 2, 3, 4, or 8)", d.LengthFieldLength))
+		return fmt.Errorf("%w: unsupported length field length %d", ErrInvalidConfiguration, d.LengthFieldLength)
 	}
 
-	return frameLength
-}
+	if d.LengthFieldOffset < 0 {
+		return fmt.Errorf("%w: length field offset must be non-negative: %d", ErrInvalidConfiguration, d.LengthFieldOffset)
+	}
 
-func (d *FrameDecoder) failOnNegativeLengthField(inputBuffer *bytes.Buffer, frameLength int64, lengthFieldEndOffset int) {
-	inputBuffer.Next(lengthFieldEndOffset)
-	panic(fmt.Sprintf("negative pre-adjustment length field: %d", frameLength))
-}
+	if d.InitialBytesToStrip < 0 {
+		return fmt.Errorf("%w: initial bytes to strip must be non-negative: %d", ErrInvalidConfiguration, d.InitialBytesToStrip)
+	}
 
-func (d *FrameDecoder) failIfNecessary(firstDetectionOfTooLongFrame bool) {
-	if d.bytesToDiscard == 0 {
-		tooLongFrameLength := d.tooLongFrameLength
-		d.tooLongFrameLength = 0
-		d.discardingTooLongFrame = false
+	if d.MaxFrameLength == 0 {
+		return fmt.Errorf("%w: max frame length must be positive", ErrInvalidConfiguration)
+	}
 
-		if !d.failFast || firstDetectionOfTooLongFrame {
-			d.fail(tooLongFrameLength)
+	if d.lengthFieldEndOffset < 0 {
+		return fmt.Errorf("%w: length field end offset overflowed", ErrInvalidConfiguration)
+	}
+
+	platformMaxInt := uint64(int(^uint(0) >> 1))
+	effectiveMax := d.MaxFrameLength
+	if effectiveMax > platformMaxInt {
+		effectiveMax = platformMaxInt
+	}
+
+	if uint64(d.lengthFieldEndOffset) > effectiveMax {
+		return fmt.Errorf("%w: length field end offset %d exceeds feasible maximum %d", ErrInvalidConfiguration, d.lengthFieldEndOffset, effectiveMax)
+	}
+
+	if d.LengthAdjustment == math.MinInt {
+		return fmt.Errorf("%w: length adjustment %d cannot be negated safely", ErrInvalidConfiguration, d.LengthAdjustment)
+	}
+
+	maxRepresentableUnadjusted, err := maxRepresentableUnadjustedLength(d.LengthFieldLength)
+	if err != nil {
+		return err
+	}
+
+	if d.LengthAdjustment < 0 {
+		magnitude := uint64(-int64(d.LengthAdjustment))
+		if magnitude > maxRepresentableUnadjusted {
+			return fmt.Errorf("%w: negative length adjustment magnitude %d exceeds max representable unadjusted length %d", ErrInvalidConfiguration, magnitude, maxRepresentableUnadjusted)
 		}
 
-		return
-	}
-
-	if d.failFast && firstDetectionOfTooLongFrame {
-		d.fail(d.tooLongFrameLength)
-	}
-}
-
-func (d *FrameDecoder) exceededFrameLength(inputBuffer *bytes.Buffer, frameLength int64) {
-	discard := frameLength - int64(inputBuffer.Len())
-	d.tooLongFrameLength = frameLength
-
-	if discard < 0 {
-		inputBuffer.Next(int(frameLength))
-	} else {
-		d.discardingTooLongFrame = true
-		d.bytesToDiscard = discard
-		inputBuffer.Next(inputBuffer.Len())
-	}
-
-	d.failIfNecessary(true)
-}
-
-func (d *FrameDecoder) failOnFrameLengthLessThanInitialBytesToStrip(inputBuffer *bytes.Buffer, frameLength int64, initialBytesToStrip int) {
-	inputBuffer.Next(int(frameLength))
-	panic(fmt.Sprintf("Adjusted frame length (%d) is less  than InitialBytesToStrip: %d", frameLength, initialBytesToStrip))
-}
-
-func (d *FrameDecoder) decode(inputBytes []byte) []byte {
-	inputBuffer := bytes.NewBuffer(inputBytes)
-
-	if d.discardingTooLongFrame {
-		d.discardingTooLongFrames(inputBuffer)
-	}
-
-	if inputBuffer.Len() < d.lengthFieldEndOffset {
 		return nil
 	}
 
-	frameLength := d.getUnadjustedFrameLength(inputBuffer, d.LengthFieldOffset, d.LengthFieldLength, d.ByteOrder)
-
-	if frameLength < 0 {
-		d.failOnNegativeLengthField(inputBuffer, frameLength, d.lengthFieldEndOffset)
+	maxPositiveAdjustment := effectiveMax - uint64(d.lengthFieldEndOffset)
+	if uint64(d.LengthAdjustment) > maxPositiveAdjustment {
+		return fmt.Errorf("%w: positive length adjustment %d exceeds feasible maximum %d", ErrInvalidConfiguration, d.LengthAdjustment, maxPositiveAdjustment)
 	}
 
-	frameLength += int64(d.LengthAdjustment) + int64(d.lengthFieldEndOffset)
-
-	if uint64(frameLength) > d.MaxFrameLength {
-		d.exceededFrameLength(inputBuffer, frameLength)
-		return nil
-	}
-
-	frameLengthInt := int(frameLength)
-
-	if inputBuffer.Len() < frameLengthInt {
-		return nil
-	}
-
-	if d.InitialBytesToStrip > frameLengthInt {
-		d.failOnFrameLengthLessThanInitialBytesToStrip(inputBuffer, frameLength, d.InitialBytesToStrip)
-	}
-
-	inputBuffer.Next(d.InitialBytesToStrip)
-
-	outputBuffer := make([]byte, frameLengthInt-d.InitialBytesToStrip)
-
-	_, _ = inputBuffer.Read(outputBuffer)
-
-	return outputBuffer
+	return nil
 }
 
-func (d *FrameDecoder) Decode(bytes []byte) [][]byte {
+func (d *FrameDecoder) Decode(input []byte) ([][]byte, error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	d.bytes = append(d.bytes, bytes...)
-	bytesSlices := make([][]byte, 0)
+	d.bytes = append(d.bytes, input...)
+	frames := make([][]byte, 0)
 
 	for {
-		bytesSlice := d.decode(d.bytes)
-
-		if bytesSlice != nil {
-			bytesSlices = append(bytesSlices, bytesSlice)
-
-			frameLength := len(bytesSlice) + d.InitialBytesToStrip
-
-			if frameLength > 0 {
-				d.bytes = d.bytes[frameLength:]
-			}
-
-			continue
+		frame, consumed, complete, err := d.decodeOne(d.bytes)
+		if err != nil {
+			d.bytes = nil
+			return nil, err
 		}
 
-		return bytesSlices
+		if !complete {
+			return frames, nil
+		}
+
+		frames = append(frames, frame)
+		d.bytes = d.bytes[consumed:]
+	}
+}
+
+func (d *FrameDecoder) decodeOne(input []byte) ([]byte, int, bool, error) {
+	if len(input) < d.lengthFieldEndOffset {
+		return nil, 0, false, nil
+	}
+
+	unadjustedFrameLength, err := d.readLengthField(input)
+	if err != nil {
+		return nil, 0, false, err
+	}
+
+	frameLength, ok := d.adjustFrameLength(unadjustedFrameLength)
+	if !ok {
+		return nil, 0, false, fmt.Errorf("%w: adjusted frame length overflow: unadjusted=%d adjustment=%d header=%d", ErrInvalidFrame, unadjustedFrameLength, d.LengthAdjustment, d.lengthFieldEndOffset)
+	}
+
+	if frameLength < uint64(d.lengthFieldEndOffset) {
+		return nil, 0, false, fmt.Errorf("%w: adjusted frame length %d is smaller than header length %d", ErrInvalidFrame, frameLength, d.lengthFieldEndOffset)
+	}
+
+	if frameLength > d.MaxFrameLength {
+		return nil, 0, false, fmt.Errorf("%w: adjusted frame length %d exceeds max frame length %d", ErrFrameTooLarge, frameLength, d.MaxFrameLength)
+	}
+
+	maxInt := uint64(int(^uint(0) >> 1))
+	if frameLength > maxInt {
+		return nil, 0, false, fmt.Errorf("%w: adjusted frame length %d exceeds platform int max %d", ErrInvalidFrame, frameLength, maxInt)
+	}
+
+	frameLengthInt := int(frameLength)
+	if len(input) < frameLengthInt {
+		return nil, 0, false, nil
+	}
+
+	if d.InitialBytesToStrip > frameLengthInt {
+		return nil, 0, false, fmt.Errorf("%w: initial bytes to strip %d exceeds frame length %d", ErrInvalidFrame, d.InitialBytesToStrip, frameLengthInt)
+	}
+
+	frame := append([]byte(nil), input[d.InitialBytesToStrip:frameLengthInt]...)
+
+	return frame, frameLengthInt, true, nil
+}
+
+func (d *FrameDecoder) readLengthField(input []byte) (uint64, error) {
+	field := input[d.LengthFieldOffset:d.lengthFieldEndOffset]
+
+	switch d.LengthFieldLength {
+	case 1:
+		return uint64(field[0]), nil
+	case 2:
+		return uint64(d.ByteOrder.Uint16(field)), nil
+	case 3:
+		if d.ByteOrder == binary.LittleEndian {
+			return uint64(field[0]) | uint64(field[1])<<8 | uint64(field[2])<<16, nil
+		}
+		return uint64(field[2]) | uint64(field[1])<<8 | uint64(field[0])<<16, nil
+	case 4:
+		return uint64(d.ByteOrder.Uint32(field)), nil
+	case 8:
+		value := d.ByteOrder.Uint64(field)
+		if value > math.MaxInt64 {
+			return 0, fmt.Errorf("%w: 8-byte length field %d exceeds max signed frame length %d", ErrInvalidFrame, value, uint64(math.MaxInt64))
+		}
+		return value, nil
+	default:
+		return 0, fmt.Errorf("%w: unsupported length field length %d", ErrInvalidConfiguration, d.LengthFieldLength)
+	}
+}
+
+func (d *FrameDecoder) adjustFrameLength(unadjusted uint64) (uint64, bool) {
+	if unadjusted > math.MaxUint64-uint64(d.lengthFieldEndOffset) {
+		return 0, false
+	}
+
+	adjusted := unadjusted + uint64(d.lengthFieldEndOffset)
+
+	adjustment := int64(d.LengthAdjustment)
+	if adjustment >= 0 {
+		positive := uint64(adjustment)
+		if adjusted > math.MaxUint64-positive {
+			return 0, false
+		}
+		return adjusted + positive, true
+	}
+
+	if adjustment == math.MinInt64 {
+		return 0, false
+	}
+
+	negative := uint64(-adjustment)
+	if adjusted < negative {
+		return 0, false
+	}
+
+	return adjusted - negative, true
+}
+
+func maxRepresentableUnadjustedLength(lengthFieldLength int) (uint64, error) {
+	switch lengthFieldLength {
+	case 1:
+		return math.MaxUint8, nil
+	case 2:
+		return math.MaxUint16, nil
+	case 3:
+		return 1<<24 - 1, nil
+	case 4:
+		return math.MaxUint32, nil
+	case 8:
+		return math.MaxInt64, nil
+	default:
+		return 0, fmt.Errorf("%w: unsupported length field length %d", ErrInvalidConfiguration, lengthFieldLength)
 	}
 }

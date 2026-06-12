@@ -1,6 +1,9 @@
 package ramix
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"net"
 )
 
@@ -9,98 +12,100 @@ type TCPConnection struct {
 	socket net.Conn
 }
 
-func (c *TCPConnection) writer() {
-	for {
-		select {
-		case <-c.ctx.Done():
-			debug("TCPConnection %d writer stopped", c.ID())
-			return
-		case data := <-c.messageChannel:
-			_, _ = c.socket.Write(data)
-		}
-	}
-}
-
 func (c *TCPConnection) reader() {
-	defer c.close(true)
+	buffer := make([]byte, c.server.ConnectionReadBufferSize)
 
 	for {
-		select {
-		case <-c.ctx.Done():
-			debug("TCPConnection %d reader stopped", c.ID())
-			return
-		default:
-			buffer := make([]byte, c.server.ConnectionReadBufferSize)
-
-			length, err := c.socket.Read(buffer)
-
-			if err != nil {
-				debug("TCPSocket read error: %v", err)
+		length, readErr := c.socket.Read(buffer)
+		if length > 0 {
+			c.refreshActivity()
+			if err := c.processInput(buffer[:length]); err != nil {
+				if errors.Is(err, ErrServerStopping) {
+					return
+				}
+				c.server.reportConnectionError(c, OperationProtocol, err)
+				c.requestClose(OperationProtocol, err)
 				return
 			}
-
-			c.refreshLastActiveTime()
-
-			bytesSlices := c.frameDecoder.Decode(buffer[0:length])
-
-			for _, bytesSlice := range bytesSlices {
-
-				message, err := c.server.decoder.Decode(bytesSlice)
-
-				if err != nil {
-					debug("Message decode error: %v", err)
-					continue
-				}
-
-				c.server.handleRequest(c, newRequest(message))
+			if c.connectionState() >= connectionClosing {
+				return
 			}
 		}
+
+		if readErr == nil {
+			continue
+		}
+
+		if c.readCtx.Err() != nil || c.forceCtx.Err() != nil {
+			return
+		}
+
+		if !errors.Is(readErr, io.EOF) && !errors.Is(readErr, net.ErrClosed) {
+			c.server.reportConnectionError(c, OperationRead, readErr)
+			c.requestClose(OperationRead, readErr)
+			return
+		}
+
+		if c.frameDecoderHasPending() {
+			err := fmt.Errorf("%w: connection ended with a partial frame", ErrInvalidFrame)
+			c.server.reportConnectionError(c, OperationProtocol, err)
+			c.requestClose(OperationProtocol, err)
+			return
+		}
+
+		c.requestClose(OperationRead, readErr)
+		return
 	}
 }
 
-func (c *TCPConnection) RemoteAddress() net.Addr {
-	return c.socket.RemoteAddr()
+func (c *TCPConnection) processInput(input []byte) error {
+	frames, err := c.frameDecoder.Decode(input)
+	if err != nil {
+		return err
+	}
+
+	for _, frame := range frames {
+		message, err := c.server.decoder.Decode(frame)
+		if err != nil {
+			return err
+		}
+
+		err = c.server.handleRequest(c, newRequest(message))
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrServerStopping):
+			return ErrServerStopping
+		case errors.Is(err, ErrWorkerQueueFull):
+			c.server.reportConnectionError(c, OperationTask, err)
+			c.requestClose(OperationTask, err)
+			return nil
+		default:
+			c.server.reportConnectionError(c, OperationTask, err)
+			c.requestClose(OperationTask, err)
+			return nil
+		}
+	}
+
+	return nil
 }
 
 func (c *TCPConnection) open() {
-	go c.reader()
-	go c.writer()
-	go c.heartbeatChecker.start()
-
-	if c.server.connectionOpen != nil {
-		c.server.connectionOpen(c)
-	}
+	c.start(c, c.reader)
 }
 
-func (c *TCPConnection) close(syncConnectionManager bool) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
-	if c.isClosed {
-		return
+func writeFull(writer io.Writer, data []byte) error {
+	for len(data) > 0 {
+		written, err := writer.Write(data)
+		if written < 0 || written > len(data) {
+			return io.ErrShortWrite
+		}
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrNoProgress
+		}
+		data = data[written:]
 	}
-
-	if c.server.connectionClose != nil {
-		c.server.connectionClose(c)
-	}
-
-	_ = c.socket.Close()
-
-	c.isClosed = true
-
-	c.cancel()
-	close(c.messageChannel)
-
-	c.heartbeatChecker.stop()
-
-	if syncConnectionManager {
-		c.server.connectionManager.removeConnection(c)
-	}
-
-	// If the worker pool is not used, need to stop the worker by self
-	if !c.server.UsingWorkerPool() {
-		c.worker.stop()
-	}
-
-	debug("TCPConnection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
+	return nil
 }

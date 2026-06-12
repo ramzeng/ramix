@@ -2,63 +2,54 @@ package ramix
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 )
 
-func newHeartbeatChecker(interval time.Duration, handler func(connection Connection)) *heartbeatChecker {
-	if handler == nil {
-		handler = func(connection Connection) {
-			if connection.isAlive() {
-				return
-			}
-
-			connection.close(true)
-		}
-	}
-
-	return &heartbeatChecker{
-		interval: interval,
-		handler:  handler,
-	}
+type activityClock struct {
+	now        func() time.Time
+	lastActive atomic.Int64
 }
 
-type heartbeatChecker struct {
-	connection Connection
-	interval   time.Duration
-	handler    func(connection Connection)
-	ctx        context.Context
-	cancel     context.CancelFunc
+func newActivityClock(now func() time.Time) *activityClock {
+	if now == nil {
+		now = time.Now
+	}
+	return &activityClock{now: now}
 }
 
-func (h *heartbeatChecker) start() {
-	h.connection.refreshLastActiveTime()
+func (c *activityClock) refresh() {
+	c.lastActive.Store(c.now().UnixNano())
+}
 
-	ticker := time.NewTicker(h.interval)
+func (c *activityClock) alive(timeout time.Duration) bool {
+	lastActive := time.Unix(0, c.lastActive.Load())
+	return lastActive.Add(timeout).After(c.now())
+}
+
+func (c *netConnection) refreshActivity() {
+	c.activity.refresh()
+}
+
+func (c *netConnection) checkHeartbeat() {
+	if c.activity.alive(c.server.HeartbeatTimeout) {
+		return
+	}
+	c.requestCloseIfOpen(OperationHeartbeat, context.DeadlineExceeded)
+}
+
+func (c *netConnection) runHeartbeat() {
+	ticker := time.NewTicker(c.server.HeartbeatInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-h.ctx.Done():
-			ticker.Stop()
-			debug("Connection %d heartbeat checker stopped", h.connection.ID())
+		case <-c.readCtx.Done():
+			return
+		case <-c.forceCtx.Done():
 			return
 		case <-ticker.C:
-			h.handler(h.connection)
+			c.checkHeartbeat()
 		}
 	}
-}
-
-func (h *heartbeatChecker) stop() {
-	h.cancel()
-}
-
-func (h *heartbeatChecker) clone(connection Connection) *heartbeatChecker {
-	checker := &heartbeatChecker{
-		connection: connection,
-		interval:   h.interval,
-		handler:    h.handler,
-	}
-
-	checker.ctx, checker.cancel = context.WithCancel(context.Background())
-
-	return checker
 }

@@ -1,41 +1,82 @@
 package ramix
 
 import (
+	"encoding/binary"
+	"errors"
+	"math"
 	"testing"
 )
 
-func TestDefaultEncoder_Encode(t *testing.T) {
-	message := Message{
-		Event:    1,
-		BodySize: 2,
-		Body:     []byte("ab"),
-	}
+func TestEncoderIgnoresSuppliedBodySize(t *testing.T) {
+	t.Parallel()
 
-	encoder := Encoder{}
-
-	packedMessage, err := encoder.Encode(message)
-
+	encoded, err := (&Encoder{}).Encode(Message{
+		Event:    7,
+		BodySize: 999,
+		Body:     []byte("ok"),
+	})
 	if err != nil {
-		t.Error(err)
+		t.Fatalf("Encode() error = %v", err)
 	}
 
-	if len(packedMessage) != 10 {
-		t.Error("packedMessage length should be 10")
+	if got, want := binary.LittleEndian.Uint32(encoded[0:4]), uint32(7); got != want {
+		t.Fatalf("event = %d, want %d", got, want)
+	}
+	if got, want := binary.LittleEndian.Uint32(encoded[4:8]), uint32(2); got != want {
+		t.Fatalf("body size = %d, want %d", got, want)
+	}
+	if got, want := string(encoded[8:]), "ok"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestEncoderRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	encoder := &Encoder{}
+	decoder := &Decoder{}
+
+	encoded, err := encoder.Encode(Message{
+		Event:    42,
+		BodySize: 1,
+		Body:     []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
 	}
 
-	if packedMessage[0] != 1 {
-		t.Error("packedMessage[0] should be 1")
+	message, err := decoder.Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
 	}
 
-	if packedMessage[4] != 2 {
-		t.Error("packedMessage[8] should be 2")
+	if got, want := message.Event, uint32(42); got != want {
+		t.Fatalf("Event = %d, want %d", got, want)
 	}
-
-	if packedMessage[8] != 97 {
-		t.Error("packedMessage[12] should be 97")
+	if got, want := message.BodySize, uint32(5); got != want {
+		t.Fatalf("BodySize = %d, want %d", got, want)
 	}
+	if got, want := string(message.Body), "hello"; got != want {
+		t.Fatalf("Body = %q, want %q", got, want)
+	}
+}
 
-	if packedMessage[9] != 98 {
-		t.Error("packedMessage[13] should be 98")
+func TestValidateEncodedBodyLengthRejectsUint32Overflow(t *testing.T) {
+	t.Parallel()
+
+	maxAllocBody := uint64(math.MaxUint32)
+	err := validateEncodedBodyLength(uint64(math.MaxUint32)+1, maxAllocBody)
+	if !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("validateEncodedBodyLength() error = %v, want ErrInvalidFrame", err)
+	}
+}
+
+func TestValidateEncodedBodyLengthRejectsAllocationOverflow(t *testing.T) {
+	t.Parallel()
+
+	maxAllocBody := uint64(16)
+	err := validateEncodedBodyLength(17, maxAllocBody)
+	if !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("validateEncodedBodyLength() error = %v, want ErrInvalidFrame", err)
 	}
 }

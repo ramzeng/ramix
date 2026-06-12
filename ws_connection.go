@@ -1,9 +1,15 @@
 package ramix
 
 import (
-	"github.com/gorilla/websocket"
+	"errors"
+	"fmt"
 	"net"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
+
+const webSocketControlWriteTimeout = 5 * time.Second
 
 type WebSocketConnection struct {
 	*netConnection
@@ -11,100 +17,102 @@ type WebSocketConnection struct {
 }
 
 func (c *WebSocketConnection) open() {
-	go c.reader()
-	go c.writer()
-	go c.heartbeatChecker.start()
-
-	if c.server.connectionOpen != nil {
-		c.server.connectionOpen(c)
-	}
+	c.installControlHandlers()
+	c.start(c, c.reader)
 }
 
-func (c *WebSocketConnection) close(syncConnectionManager bool) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
-	if c.isClosed {
-		return
-	}
-
-	if c.server.connectionClose != nil {
-		c.server.connectionClose(c)
-	}
-
-	_ = c.socket.Close()
-
-	c.isClosed = true
-
-	c.cancel()
-	close(c.messageChannel)
-
-	c.heartbeatChecker.stop()
-
-	if syncConnectionManager {
-		c.server.connectionManager.removeConnection(c)
-	}
-
-	// If the worker pool is not used, need to stop the worker by self
-	if !c.server.UsingWorkerPool() {
-		c.worker.stop()
-	}
-
-	debug("WebSocketConnection %d closed, remote address: %v", c.ID(), c.socket.RemoteAddr())
-}
-
-func (c *WebSocketConnection) writer() {
-	for {
-		select {
-		case <-c.ctx.Done():
-			debug("WebSocketConnection %d writer stopped", c.ID())
-			return
-		case data := <-c.messageChannel:
-			_ = c.socket.WriteMessage(websocket.BinaryMessage, data)
+func (c *WebSocketConnection) installControlHandlers() {
+	c.socket.SetPingHandler(func(applicationData string) error {
+		c.refreshActivity()
+		err := c.socket.WriteControl(
+			websocket.PongMessage,
+			[]byte(applicationData),
+			time.Now().Add(webSocketControlWriteTimeout),
+		)
+		if err != nil && c.tryRequestClose(OperationWrite, err) {
+			c.server.reportConnectionError(c, OperationWrite, err)
 		}
-	}
+		return err
+	})
+	c.socket.SetPongHandler(func(string) error {
+		c.refreshActivity()
+		return nil
+	})
 }
 
 func (c *WebSocketConnection) reader() {
-	defer c.close(true)
-
 	for {
-		select {
-		case <-c.ctx.Done():
-			debug("WebSocketConnection %d reader stopped", c.ID())
-			return
-		default:
-			messageType, buffer, err := c.socket.ReadMessage()
-
-			if messageType == websocket.PingMessage {
-				c.refreshLastActiveTime()
-				continue
+		messageType, buffer, err := c.socket.ReadMessage()
+		if err != nil {
+			if c.readCtx.Err() != nil || c.forceCtx.Err() != nil {
+				return
 			}
+			if errors.Is(err, net.ErrClosed) || websocket.IsCloseError(
+				err,
+				websocket.CloseNormalClosure,
+				websocket.CloseGoingAway,
+			) {
+				c.requestClose(OperationRead, err)
+				return
+			}
+			if c.tryRequestClose(OperationRead, err) {
+				c.server.reportConnectionError(c, OperationRead, err)
+			}
+			return
+		}
 
+		if messageType != websocket.BinaryMessage {
+			c.fail(OperationProtocol, fmt.Errorf(
+				"%w: websocket message type %d is not binary",
+				ErrInvalidFrame,
+				messageType,
+			))
+			return
+		}
+		if len(buffer) == 0 {
+			c.fail(OperationProtocol, fmt.Errorf(
+				"%w: websocket binary message is empty",
+				ErrInvalidFrame,
+			))
+			return
+		}
+
+		c.refreshActivity()
+		frames, err := c.frameDecoder.Decode(buffer)
+		if err != nil {
+			c.fail(OperationProtocol, err)
+			return
+		}
+		if c.frameDecoderHasPending() {
+			c.fail(OperationProtocol, fmt.Errorf(
+				"%w: websocket binary message ended with a partial frame",
+				ErrInvalidFrame,
+			))
+			return
+		}
+
+		for _, frame := range frames {
+			message, err := c.server.decoder.Decode(frame)
 			if err != nil {
-				debug("WebSocket read error: %v", err)
+				c.fail(OperationProtocol, err)
 				return
 			}
 
-			c.refreshLastActiveTime()
-
-			bytesSlices := c.frameDecoder.Decode(buffer)
-
-			for _, bytesSlice := range bytesSlices {
-
-				message, err := c.server.decoder.Decode(bytesSlice)
-
-				if err != nil {
-					debug("Message decode error: %v", err)
-					continue
-				}
-
-				c.server.handleRequest(c, newRequest(message))
+			err = c.server.handleRequest(c, newRequest(message))
+			switch {
+			case err == nil:
+			case errors.Is(err, ErrServerStopping):
+				return
+			default:
+				c.fail(OperationTask, err)
+				return
 			}
 		}
 	}
 }
 
-func (c *WebSocketConnection) RemoteAddress() net.Addr {
-	return c.socket.RemoteAddr()
+func (c *WebSocketConnection) fail(operation ConnectionOperation, err error) {
+	if c.tryRequestClose(operation, err) {
+		c.server.reportConnectionError(c, operation, err)
+	}
 }
