@@ -89,12 +89,6 @@ func (c *TCPConnection) processInput(input []byte) error {
 	return nil
 }
 
-func (c *TCPConnection) frameDecoderHasPending() bool {
-	c.frameDecoder.lock.Lock()
-	defer c.frameDecoder.lock.Unlock()
-	return len(c.frameDecoder.bytes) > 0
-}
-
 func (c *TCPConnection) open() {
 	c.netConnection.start(c, c.reader)
 }

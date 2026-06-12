@@ -371,6 +371,12 @@ func (c *netConnection) closeReason() (ConnectionOperation, error) {
 	return c.closeOp, c.closeErr
 }
 
+func (c *netConnection) frameDecoderHasPending() bool {
+	c.frameDecoder.lock.Lock()
+	defer c.frameDecoder.lock.Unlock()
+	return len(c.frameDecoder.bytes) > 0
+}
+
 func (c *netConnection) closeTransport() {
 	c.transportCloseOnce.Do(func() {
 		if c.transport != nil {
