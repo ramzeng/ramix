@@ -18,7 +18,7 @@ type WebSocketConnection struct {
 
 func (c *WebSocketConnection) open() {
 	c.installControlHandlers()
-	c.netConnection.start(c, c.reader)
+	c.start(c, c.reader)
 }
 
 func (c *WebSocketConnection) installControlHandlers() {

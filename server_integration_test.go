@@ -348,7 +348,7 @@ func TestIntegration_TCPConcurrentClientsPreservePerConnectionOrder(t *testing.T
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			if err := client.SetDeadline(time.Now().Add(integrationTimeout)); err != nil {
 				errCh <- err
 				return

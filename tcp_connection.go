@@ -90,7 +90,7 @@ func (c *TCPConnection) processInput(input []byte) error {
 }
 
 func (c *TCPConnection) open() {
-	c.netConnection.start(c, c.reader)
+	c.start(c, c.reader)
 }
 
 func writeFull(writer io.Writer, data []byte) error {

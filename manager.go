@@ -102,7 +102,7 @@ func (m *connectionManager) forceCloseAll() {
 func (m *connectionManager) waitAll(ctx context.Context) error {
 	for {
 		connections := m.snapshot()
-		finalizing, finalizingChange := m.finalizationState()
+		finalizing, _ := m.finalizationState()
 		connections = append(connections, finalizing...)
 		if len(connections) == 0 {
 			return nil
@@ -113,7 +113,7 @@ func (m *connectionManager) waitAll(ctx context.Context) error {
 			}
 		}
 
-		finalizing, finalizingChange = m.finalizationState()
+		finalizing, finalizingChange := m.finalizationState()
 		if len(finalizing) == 0 {
 			return nil
 		}

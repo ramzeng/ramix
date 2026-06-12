@@ -88,7 +88,8 @@ func TestContextCancellation(t *testing.T) {
 	})
 
 	t.Run("nil parent falls back to background", func(t *testing.T) {
-		ctx := newContext(nil, nil, nil)
+		//lint:ignore SA1012 This test verifies the documented nil-parent fallback.
+		ctx := newContext(nil, nil, nil) //nolint:staticcheck // Verifies the nil-parent fallback.
 
 		select {
 		case <-ctx.Done():

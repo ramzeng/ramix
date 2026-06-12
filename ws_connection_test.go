@@ -86,7 +86,7 @@ func newWebSocketTestFixture(
 
 	t.Cleanup(func() {
 		for _, connection := range server.connectionManager.snapshot() {
-			connection.requestClose(OperationRead, netErrTestClosed)
+			connection.requestClose(OperationRead, errNetTestClosed)
 		}
 		waitCtx, cancelWait := context.WithTimeout(context.Background(), time.Second)
 		defer cancelWait()
@@ -105,7 +105,7 @@ func newWebSocketTestFixture(
 	return fixture
 }
 
-var netErrTestClosed = errors.New("test connection closed")
+var errNetTestClosed = errors.New("test connection closed")
 
 func (f *webSocketTestFixture) dial(t *testing.T) (*WebSocketConnection, *websocket.Conn) {
 	t.Helper()
@@ -130,9 +130,11 @@ func (f *webSocketTestFixture) dial(t *testing.T) (*WebSocketConnection, *websoc
 func TestWebSocketConnectionBinaryMessageRoutes(t *testing.T) {
 	fixture := newWebSocketTestFixture(t, nil)
 	routed := make(chan string, 1)
-	fixture.server.RegisterRoute(21, func(ctx *Context) {
+	if err := fixture.server.RegisterRoute(21, func(ctx *Context) {
 		routed <- string(ctx.Request.Message.Body)
-	})
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 	_, client := fixture.dial(t)
 
 	if err := client.WriteMessage(websocket.BinaryMessage, encodeTCPTestMessage(t, 21, "binary")); err != nil {
@@ -150,9 +152,11 @@ func TestWebSocketConnectionRejectsTextAndKeepsOtherConnectionAlive(t *testing.T
 		reported <- tcpTestError{op: op, err: err}
 	}
 	routed := make(chan string, 1)
-	fixture.server.RegisterRoute(22, func(ctx *Context) {
+	if err := fixture.server.RegisterRoute(22, func(ctx *Context) {
 		routed <- string(ctx.Request.Message.Body)
-	})
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 	badConnection, badClient := fixture.dial(t)
 	healthyConnection, healthyClient := fixture.dial(t)
 
@@ -200,9 +204,11 @@ func TestWebSocketConnectionMalformedBinaryClosesOnlyOffender(t *testing.T) {
 				reported <- tcpTestError{op: op, err: err}
 			}
 			routed := make(chan string, 1)
-			fixture.server.RegisterRoute(23, func(ctx *Context) {
+			if err := fixture.server.RegisterRoute(23, func(ctx *Context) {
 				routed <- string(ctx.Request.Message.Body)
-			})
+			}); err != nil {
+				t.Fatalf("RegisterRoute() error = %v", err)
+			}
 			badConnection, badClient := fixture.dial(t)
 			healthyConnection, healthyClient := fixture.dial(t)
 
@@ -309,11 +315,13 @@ func TestWebSocketConnectionQuiesceAllowsAcceptedResponseWrite(t *testing.T) {
 	}
 	handlerStarted := make(chan struct{})
 	releaseHandler := make(chan struct{})
-	fixture.server.RegisterRoute(24, func(ctx *Context) {
+	if err := fixture.server.RegisterRoute(24, func(ctx *Context) {
 		close(handlerStarted)
 		<-releaseHandler
 		_ = ctx.Connection.Send(ctx, 25, []byte("response"))
-	})
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 	connection, client := fixture.dial(t)
 
 	if err := client.WriteMessage(websocket.BinaryMessage, encodeTCPTestMessage(t, 24, "request")); err != nil {

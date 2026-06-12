@@ -78,9 +78,11 @@ func encodeTCPTestMessage(t *testing.T, event uint32, body string) []byte {
 func TestTCPConnectionSplitFrameRoutesExactlyOnce(t *testing.T) {
 	server := newTCPTestServer(t)
 	routed := make(chan string, 2)
-	server.RegisterRoute(7, func(ctx *Context) {
+	if err := server.RegisterRoute(7, func(ctx *Context) {
 		routed <- string(ctx.Request.Message.Body)
-	})
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 	_, client := openTCPTestConnection(t, server)
 
 	frame := encodeTCPTestMessage(t, 7, "split")
@@ -101,9 +103,11 @@ func TestTCPConnectionSplitFrameRoutesExactlyOnce(t *testing.T) {
 func TestTCPConnectionCoalescedFramesRouteInOrder(t *testing.T) {
 	server := newTCPTestServer(t)
 	routed := make(chan string, 2)
-	server.RegisterRoute(8, func(ctx *Context) {
+	if err := server.RegisterRoute(8, func(ctx *Context) {
 		routed <- string(ctx.Request.Message.Body)
-	})
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 	_, client := openTCPTestConnection(t, server)
 
 	first := encodeTCPTestMessage(t, 8, "first")
@@ -313,7 +317,9 @@ func (c *singleReadTCPConn) SetWriteDeadline(time.Time) error { return nil }
 
 func TestTCPConnectionReadDataWithUnexpectedErrorReportsRead(t *testing.T) {
 	server := newTCPTestServer(t)
-	server.RegisterRoute(12, func(*Context) {})
+	if err := server.RegisterRoute(12, func(*Context) {}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 	reported := make(chan tcpTestError, 1)
 	server.connectionError = func(_ Connection, op ConnectionOperation, err error) {
 		reported <- tcpTestError{op: op, err: err}
@@ -450,14 +456,16 @@ func TestTCPConnectionWorkerQueueFullReportsTaskAndClosesOnlyOffender(t *testing
 	t.Cleanup(func() {
 		handlerReleaseOnce.Do(func() { close(handlerRelease) })
 	})
-	server.RegisterRoute(10, func(*Context) {
+	if err := server.RegisterRoute(10, func(*Context) {
 		select {
 		case <-handlerStarted:
 		default:
 			close(handlerStarted)
 		}
 		<-handlerRelease
-	})
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 	reported := make(chan tcpTestError, 1)
 	server.connectionError = func(_ Connection, op ConnectionOperation, err error) {
 		reported <- tcpTestError{op: op, err: err}
@@ -501,7 +509,7 @@ func TestTCPConnectionServerStoppingExitsWithoutErrorReport(t *testing.T) {
 		t.Fatalf("stopAcceptingAndDrain() error = %v", err)
 	}
 	serverSide, clientSide := net.Pipe()
-	defer clientSide.Close()
+	defer func() { _ = clientSide.Close() }()
 	base, err := newNetConnection(1, server, serverSide, func(data []byte) error { return writeFull(serverSide, data) })
 	if err != nil {
 		t.Fatalf("newNetConnection() error = %v", err)

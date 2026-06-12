@@ -89,8 +89,9 @@ func NewServer(serverOptions ...ServerOption) (*Server, error) {
 		CheckOrigin:    func(*http.Request) bool { return true },
 	}
 	server.router = newRouter()
-	server.routeGroup = newGroup(server.router)
-	server.routeGroup.server = server
+	routeGroup := newGroup(server.router)
+	routeGroup.server = server
+	server.routeGroup = routeGroup
 	server.connectionManager = newConnectionManager(server.ConnectionGroupsCount)
 	server.workerPool = newWorkerPool(server.WorkerCount, server.WorkerQueueCapacity)
 	return server, nil

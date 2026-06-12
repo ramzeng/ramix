@@ -18,12 +18,6 @@ func (s *Server) currentState() serverState {
 	return s.state
 }
 
-func (s *Server) mutationError() error {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	return s.mutationErrorLocked()
-}
-
 func (s *Server) mutationErrorLocked() error {
 	switch s.state {
 	case stateNew:
