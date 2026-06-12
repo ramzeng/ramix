@@ -133,6 +133,12 @@ func (p *workerPool) stopAcceptingAndDrain(ctx context.Context) error {
 	}
 }
 
+func (p *workerPool) stopAccepting() {
+	p.submitMu.Lock()
+	p.accepting = false
+	p.submitMu.Unlock()
+}
+
 func (p *workerPool) forceCancel() {
 	for _, task := range p.snapshotTasks() {
 		task.cancelTask()

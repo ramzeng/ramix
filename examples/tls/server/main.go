@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"github.com/ramzeng/ramix"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -17,11 +21,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server.Use(ramix.Recovery(), ramix.Logger())
+	if err := server.Use(ramix.Recovery(), ramix.Logger()); err != nil {
+		log.Fatal(err)
+	}
 
-	server.RegisterRoute(0, func(context *ramix.Context) {
+	if err := server.RegisterRoute(0, func(context *ramix.Context) {
 		_ = context.Connection.Send(context, context.Request.Message.Event, []byte("pong"))
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 
-	server.Serve()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := server.Run(ctx); err != nil {
+		log.Fatal(err)
+	}
 }

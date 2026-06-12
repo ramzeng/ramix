@@ -5,9 +5,11 @@ import "testing"
 func TestRouteGroup_Use(t *testing.T) {
 	rg := newGroup(newRouter())
 
-	rg.Use(func(context *Context) {
+	if err := rg.Use(func(context *Context) {
 		context.Next()
-	})
+	}); err != nil {
+		t.Fatalf("Use() error = %v", err)
+	}
 
 	if len(rg.handlers) != 1 {
 		t.Error("Expected 1 handler, got", len(rg.handlers))
@@ -27,9 +29,11 @@ func TestRouteGroup_Group(t *testing.T) {
 func TestRouteGroup_RegisterRoute(t *testing.T) {
 	rg := newGroup(newRouter())
 
-	rg.RegisterRoute(1, func(context *Context) {
+	if err := rg.RegisterRoute(1, func(context *Context) {
 		context.Next()
-	})
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
 
 	if len(rg.router.routes) != 1 {
 		t.Error("Expected 1 route, got", len(rg.router.routes))

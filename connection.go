@@ -193,9 +193,7 @@ func (c *netConnection) start(self managedConnection, reader func()) {
 		}()
 		go c.supervise(openHookDone)
 
-		if c.server.connectionOpen != nil {
-			c.server.connectionOpen(self)
-		}
+		c.server.invokeOpenHook(self)
 		close(openHookDone)
 	})
 }
@@ -334,9 +332,7 @@ func (c *netConnection) supervise(openHookDone <-chan struct{}) {
 		c.closeTransport()
 		if c.self != nil {
 			c.server.connectionManager.removeConnection(c.self)
-			if c.server.connectionClose != nil {
-				c.server.connectionClose(c.self)
-			}
+			c.server.invokeCloseHook(c.self)
 		}
 		c.stateMu.Lock()
 		c.state.Store(uint32(connectionClosed))

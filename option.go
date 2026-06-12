@@ -2,7 +2,10 @@ package ramix
 
 import (
 	"fmt"
+	"net/url"
+	pathpkg "path"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -211,12 +214,17 @@ func validateServerOptions(opts ServerOptions) error {
 		return fmt.Errorf("%w: transports must not be empty", ErrInvalidConfiguration)
 	}
 
+	seenTransports := make(map[Transport]struct{}, len(opts.Transports))
 	for _, transport := range opts.Transports {
 		switch transport {
 		case TransportTCP, TransportWebSocket:
 		default:
 			return fmt.Errorf("%w: unsupported transport %q", ErrInvalidConfiguration, transport.String())
 		}
+		if _, exists := seenTransports[transport]; exists {
+			return fmt.Errorf("%w: duplicate transport %q", ErrInvalidConfiguration, transport.String())
+		}
+		seenTransports[transport] = struct{}{}
 	}
 
 	if opts.HasTransport(TransportTCP) {
@@ -231,6 +239,23 @@ func validateServerOptions(opts ServerOptions) error {
 		}
 		if opts.WebSocketPath == "" {
 			return fmt.Errorf("%w: websocket path must not be empty", ErrInvalidConfiguration)
+		}
+		if opts.WebSocketPath[0] != '/' {
+			return fmt.Errorf("%w: websocket path must start with '/': %q", ErrInvalidConfiguration, opts.WebSocketPath)
+		}
+		if strings.ContainsAny(opts.WebSocketPath, "{}") {
+			return fmt.Errorf("%w: websocket path must not contain ServeMux wildcards: %q", ErrInvalidConfiguration, opts.WebSocketPath)
+		}
+		parsedPath, err := url.ParseRequestURI(opts.WebSocketPath)
+		if err != nil || parsedPath.RawQuery != "" || parsedPath.Fragment != "" {
+			return fmt.Errorf("%w: invalid websocket path %q", ErrInvalidConfiguration, opts.WebSocketPath)
+		}
+		cleanedPath := pathpkg.Clean(opts.WebSocketPath)
+		if strings.HasSuffix(opts.WebSocketPath, "/") && opts.WebSocketPath != "/" {
+			cleanedPath += "/"
+		}
+		if cleanedPath != opts.WebSocketPath {
+			return fmt.Errorf("%w: websocket path must be clean: %q", ErrInvalidConfiguration, opts.WebSocketPath)
 		}
 	}
 
