@@ -211,26 +211,31 @@ func TestServerMetricsSnapshotAggregatesTransports(t *testing.T) {
 func TestServerMetricsSaturatesAndGuardsGaugeUnderflow(t *testing.T) {
 	var metrics serverMetrics
 
-	metrics.connectionClosed(TransportTCP)
-	metrics.taskDequeued(TransportTCP)
-	metrics.tcp.activeConnections.Store(math.MaxUint64)
-	metrics.tcp.queuedTasks.Store(math.MaxUint64)
-	metrics.tcp.receivedMessages.Store(math.MaxUint64)
-	metrics.tcp.receivedBytes.Store(math.MaxUint64)
-	metrics.tcp.sentMessages.Store(math.MaxUint64)
-	metrics.tcp.sentBytes.Store(math.MaxUint64)
-	metrics.tcp.rejectedTasks.Store(math.MaxUint64)
-	metrics.tcp.connectionErrors.Store(math.MaxUint64)
-	metrics.tcp.completedRequests.Store(math.MaxUint64)
-	metrics.tcp.totalRequestDuration.Store(math.MaxInt64)
+	metrics.tcp.activeConnections.Store(math.MaxUint64 - 1)
+	metrics.tcp.queuedTasks.Store(math.MaxUint64 - 1)
+	metrics.tcp.receivedMessages.Store(math.MaxUint64 - 1)
+	metrics.tcp.receivedBytes.Store(math.MaxUint64 - 1)
+	metrics.tcp.sentMessages.Store(math.MaxUint64 - 1)
+	metrics.tcp.sentBytes.Store(math.MaxUint64 - 1)
+	metrics.tcp.rejectedTasks.Store(math.MaxUint64 - 1)
+	metrics.tcp.connectionErrors.Store(math.MaxUint64 - 1)
+	metrics.tcp.completedRequests.Store(math.MaxUint64 - 1)
+	metrics.tcp.totalRequestDuration.Store(math.MaxInt64 - 1)
 
 	metrics.connectionOpened(TransportTCP)
+	metrics.connectionOpened(TransportTCP)
 	metrics.taskQueued(TransportTCP)
-	metrics.messageReceived(TransportTCP, 1)
-	metrics.messageSent(TransportTCP, 1)
+	metrics.taskQueued(TransportTCP)
+	metrics.messageReceived(TransportTCP, 2)
+	metrics.messageReceived(TransportTCP, 0)
+	metrics.messageSent(TransportTCP, 2)
+	metrics.messageSent(TransportTCP, 0)
+	metrics.taskRejected(TransportTCP)
 	metrics.taskRejected(TransportTCP)
 	metrics.connectionError(TransportTCP)
-	metrics.requestCompleted(TransportTCP, time.Nanosecond)
+	metrics.connectionError(TransportTCP)
+	metrics.requestCompleted(TransportTCP, 2*time.Nanosecond)
+	metrics.requestCompleted(TransportTCP, 0)
 
 	got := metrics.snapshot().TCP
 	if got.ActiveConnections != math.MaxUint64 {
@@ -253,6 +258,9 @@ func TestServerMetricsSaturatesAndGuardsGaugeUnderflow(t *testing.T) {
 	}
 	if got.TotalRequestDuration != time.Duration(math.MaxInt64) {
 		t.Errorf("TotalRequestDuration = %s, want saturation at %s", got.TotalRequestDuration, time.Duration(math.MaxInt64))
+	}
+	if got := metrics.tcp.totalRequestDuration.Load(); got != math.MaxInt64 {
+		t.Errorf("stored total request duration = %d, want saturation at %d", got, uint64(math.MaxInt64))
 	}
 
 	var underflow serverMetrics
