@@ -26,6 +26,7 @@ type Server struct {
 	decoder             DecoderInterface
 	encoder             EncoderInterface
 	connectionManager   *connectionManager
+	metrics             serverMetrics
 
 	connectionOpen  func(Connection)
 	connectionClose func(Connection)
