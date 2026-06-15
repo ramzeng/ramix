@@ -8,6 +8,22 @@ import (
 	"time"
 )
 
+func waitForStats(t *testing.T, server *Server, condition func(ServerStats) bool, label string) ServerStats {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := server.Stats()
+		if condition(stats) {
+			return stats
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s; final snapshot = %+v", label, stats)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestServerStatsStartsAtZeroAndIsDetached(t *testing.T) {
 	server, err := NewServer()
 	if err != nil {

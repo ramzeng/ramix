@@ -45,7 +45,7 @@ func openTCPTestConnection(t *testing.T, server *Server) (*TCPConnection, net.Co
 	t.Helper()
 	serverSide, clientSide := net.Pipe()
 	connectionID := atomic.AddUint64(&server.currentConnectionID, 1)
-	base, err := newNetConnection(connectionID, server, serverSide, func(data []byte) error {
+	base, err := newNetConnection(connectionID, server, TransportTCP, serverSide, func(data []byte) error {
 		return writeFull(serverSide, data)
 	})
 	if err != nil {
@@ -253,7 +253,7 @@ func TestTCPConnectionWriteFailureReportsOperationWrite(t *testing.T) {
 	}
 	transport := newFakeLifecycleTransport()
 	writeErr := errors.New("write failed")
-	connection, err := newNetConnection(1, server, transport, func([]byte) error {
+	connection, err := newNetConnection(1, server, TransportTCP, transport, func([]byte) error {
 		return writeErr
 	})
 	if err != nil {
@@ -326,7 +326,7 @@ func TestTCPConnectionReadDataWithUnexpectedErrorReportsRead(t *testing.T) {
 	}
 	resetErr := errors.New("connection reset")
 	socket := newSingleReadTCPConn(encodeTCPTestMessage(t, 12, "body"), resetErr)
-	base, err := newNetConnection(1, server, socket, func(data []byte) error { return writeFull(socket, data) })
+	base, err := newNetConnection(1, server, TransportTCP, socket, func(data []byte) error { return writeFull(socket, data) })
 	if err != nil {
 		t.Fatalf("newNetConnection() error = %v", err)
 	}
@@ -351,7 +351,7 @@ func TestTCPConnectionConcurrentCloseSuppressesExpectedWriterError(t *testing.T)
 	}
 	transport := newFakeLifecycleTransport()
 	writeStarted := make(chan struct{})
-	connection, err := newNetConnection(1, server, transport, func([]byte) error {
+	connection, err := newNetConnection(1, server, TransportTCP, transport, func([]byte) error {
 		close(writeStarted)
 		<-transport.closed
 		return net.ErrClosed
@@ -403,7 +403,7 @@ func (c *quiesceTCPConn) SetReadDeadline(time.Time) error {
 func TestTCPConnectionQuiesceStopsReaderWithoutClosingWriter(t *testing.T) {
 	server := newTCPTestServer(t)
 	socket := newQuiesceTCPConn()
-	base, err := newNetConnection(1, server, socket, func(data []byte) error {
+	base, err := newNetConnection(1, server, TransportTCP, socket, func(data []byte) error {
 		return writeFull(socket, data)
 	})
 	if err != nil {
@@ -510,7 +510,7 @@ func TestTCPConnectionServerStoppingExitsWithoutErrorReport(t *testing.T) {
 	}
 	serverSide, clientSide := net.Pipe()
 	defer func() { _ = clientSide.Close() }()
-	base, err := newNetConnection(1, server, serverSide, func(data []byte) error { return writeFull(serverSide, data) })
+	base, err := newNetConnection(1, server, TransportTCP, serverSide, func(data []byte) error { return writeFull(serverSide, data) })
 	if err != nil {
 		t.Fatalf("newNetConnection() error = %v", err)
 	}

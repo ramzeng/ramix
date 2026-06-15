@@ -578,7 +578,7 @@ func (s *Server) reportConnectionError(connection Connection, operation Connecti
 }
 
 func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID uint64) {
-	base, err := newNetConnection(connectionID, s, socket, func(data []byte) error {
+	base, err := newNetConnection(connectionID, s, TransportWebSocket, socket, func(data []byte) error {
 		return socket.WriteMessage(websocket.BinaryMessage, data)
 	})
 	if err != nil {
@@ -591,7 +591,7 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 }
 
 func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
-	base, err := newNetConnection(connectionID, s, socket, func(data []byte) error {
+	base, err := newNetConnection(connectionID, s, TransportTCP, socket, func(data []byte) error {
 		return writeFull(socket, data)
 	})
 	if err != nil {

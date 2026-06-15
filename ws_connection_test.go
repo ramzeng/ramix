@@ -58,7 +58,7 @@ func newWebSocketTestFixture(
 		}
 
 		connectionID := atomic.AddUint64(&server.currentConnectionID, 1)
-		base, err := newNetConnection(connectionID, server, socket, func(data []byte) error {
+		base, err := newNetConnection(connectionID, server, TransportWebSocket, socket, func(data []byte) error {
 			active := fixture.applicationBusy.Add(1)
 			for {
 				maximum := fixture.maxApplication.Load()
