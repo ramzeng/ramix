@@ -1,6 +1,7 @@
 package ramix
 
 import (
+	"context"
 	"math"
 	"sync"
 	"testing"
@@ -38,6 +39,97 @@ func TestServerStatsStartsAtZeroAndIsDetached(t *testing.T) {
 	}
 	if got, want := second.TCP.ActiveConnections, uint64(2); got != want {
 		t.Fatalf("second snapshot TCP.ActiveConnections = %d, want %d", got, want)
+	}
+}
+
+func TestServerStatsRemainReadableAcrossRunAndShutdown(t *testing.T) {
+	server, err := NewServer(
+		WithTransports(TransportTCP),
+		WithIPVersion("tcp4"),
+		WithIP("127.0.0.1"),
+		WithPort(0),
+		WithShutdownTimeout(time.Second),
+		WithHeartbeatInterval(time.Hour),
+		WithHeartbeatTimeout(2*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	runContext, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	runReturned := false
+	go func() { runDone <- server.Run(runContext) }()
+	t.Cleanup(func() {
+		cancelRun()
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancelShutdown()
+		if err := server.Shutdown(shutdownContext); err != nil {
+			t.Errorf("cleanup Shutdown() error = %v", err)
+		}
+		if runReturned {
+			return
+		}
+		select {
+		case err := <-runDone:
+			if err != nil {
+				t.Errorf("cleanup Run() error = %v", err)
+			}
+		case <-shutdownContext.Done():
+			t.Errorf("cleanup timed out waiting for Run(): %v", shutdownContext.Err())
+		}
+	})
+
+	deadline := time.NewTimer(3 * time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for server.currentState() != stateRunning || server.Address(TransportTCP) == nil {
+		select {
+		case err := <-runDone:
+			runReturned = true
+			t.Fatalf("Run() returned before readiness: %v", err)
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatal("server did not reach running state with a TCP address")
+		}
+	}
+
+	if got := server.Stats(); got != (ServerStats{}) {
+		t.Fatalf("Stats() while running = %+v, want zero value", got)
+	}
+	server.metrics.messageReceived(TransportTCP, 37)
+	runningStats := server.Stats()
+	if got, want := runningStats.TCP.ReceivedMessages, uint64(1); got != want {
+		t.Fatalf("running TCP.ReceivedMessages = %d, want %d", got, want)
+	}
+	if got, want := runningStats.TCP.ReceivedBytes, uint64(37); got != want {
+		t.Fatalf("running TCP.ReceivedBytes = %d, want %d", got, want)
+	}
+	if runningStats.Total != runningStats.TCP {
+		t.Fatalf("running Total = %+v, want TCP %+v", runningStats.Total, runningStats.TCP)
+	}
+	if runningStats.WebSocket != (TransportStats{}) {
+		t.Fatalf("running WebSocket = %+v, want zero value", runningStats.WebSocket)
+	}
+
+	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownContext); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	select {
+	case err := <-runDone:
+		runReturned = true
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-shutdownContext.Done():
+		t.Fatalf("timed out waiting for Run(): %v", shutdownContext.Err())
+	}
+
+	if got := server.Stats(); got != runningStats {
+		t.Fatalf("Stats() after shutdown = %+v, want preserved snapshot %+v", got, runningStats)
 	}
 }
 
