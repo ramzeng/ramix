@@ -250,7 +250,9 @@ func (c *netConnection) writeOutgoing(data []byte) error {
 	if err := c.writeMessage(data); err != nil {
 		return err
 	}
-	c.server.metrics.messageSent(c.statsTransport(), uint64(len(data)-8))
+	if len(data) >= 8 {
+		c.server.metrics.messageSent(c.statsTransport(), uint64(len(data)-8))
+	}
 	return nil
 }
 

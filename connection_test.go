@@ -159,6 +159,20 @@ func TestConnectionMetricsTrackLifecycleAndSuccessfulWrites(t *testing.T) {
 	}
 }
 
+func TestConnectionMetricsIgnoreShortSuccessfulWrite(t *testing.T) {
+	transport := newFakeLifecycleTransport()
+	server, connection := newLifecycleTestConnection(t, transport, 1)
+
+	if err := connection.writeOutgoing([]byte("short")); err != nil {
+		t.Fatalf("writeOutgoing(short) error = %v", err)
+	}
+
+	stats := server.Stats()
+	if stats.TCP.SentMessages != 0 || stats.TCP.SentBytes != 0 {
+		t.Fatalf("TCP sent metrics = (%d, %d), want zero after short successful write", stats.TCP.SentMessages, stats.TCP.SentBytes)
+	}
+}
+
 func TestConnectionMetricsDoNotCountFailedWrite(t *testing.T) {
 	transport := newFakeLifecycleTransport()
 	server, err := NewServer(
