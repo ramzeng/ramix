@@ -97,6 +97,7 @@ func (c *WebSocketConnection) reader() {
 				c.fail(OperationProtocol, err)
 				return
 			}
+			c.server.metrics.messageReceived(c.metricTransport, uint64(len(message.Body)))
 
 			err = c.server.handleRequest(c, newRequest(message))
 			switch {

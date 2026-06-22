@@ -73,6 +73,21 @@ func (s *Server) Stats() ServerStats {
 	return s.metrics.snapshot()
 }
 
+type statsTransportProvider interface {
+	statsTransport() Transport
+}
+
+func transportForStats(connection Connection) Transport {
+	if connection == nil {
+		return 0
+	}
+	provider, ok := connection.(statsTransportProvider)
+	if !ok {
+		return 0
+	}
+	return provider.statsTransport()
+}
+
 func (m *serverMetrics) forTransport(transport Transport) *transportMetrics {
 	switch transport {
 	case TransportTCP:

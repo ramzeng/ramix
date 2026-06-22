@@ -75,6 +75,79 @@ func encodeTCPTestMessage(t *testing.T, event uint32, body string) []byte {
 	return data
 }
 
+func newTCPProcessInputTestConnection(t *testing.T, server *Server) *TCPConnection {
+	t.Helper()
+	transport := newFakeLifecycleTransport()
+	base, err := newNetConnection(1, server, TransportTCP, transport, transport.Write)
+	if err != nil {
+		t.Fatalf("newNetConnection() error = %v", err)
+	}
+	return &TCPConnection{netConnection: base}
+}
+
+func TestTCPConnectionReceiveStatsCountMultipleDecodedMessages(t *testing.T) {
+	server := newTCPTestServer(t)
+	routed := make(chan string, 2)
+	if err := server.RegisterRoute(30, func(ctx *Context) {
+		routed <- string(ctx.Request.Message.Body)
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
+	connection := newTCPProcessInputTestConnection(t, server)
+
+	first := encodeTCPTestMessage(t, 30, "one")
+	second := encodeTCPTestMessage(t, 30, "payload")
+	if err := connection.processInput(append(first, second...)); err != nil {
+		t.Fatalf("processInput() error = %v", err)
+	}
+
+	if got := waitForString(t, routed, "first TCP receive stats route"); got != "one" {
+		t.Fatalf("first routed body = %q, want one", got)
+	}
+	if got := waitForString(t, routed, "second TCP receive stats route"); got != "payload" {
+		t.Fatalf("second routed body = %q, want payload", got)
+	}
+	stats := waitForStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.ReceivedMessages == 2 && stats.TCP.ReceivedBytes == 10
+	}, "TCP receive stats for decoded messages")
+	if stats.Total != stats.TCP {
+		t.Fatalf("Total = %+v, want TCP %+v", stats.Total, stats.TCP)
+	}
+	if stats.WebSocket != (TransportStats{}) {
+		t.Fatalf("WebSocket = %+v, want zero value", stats.WebSocket)
+	}
+}
+
+func TestTCPConnectionReceiveStatsExcludeMalformedBatch(t *testing.T) {
+	server := newTCPTestServer(t)
+	routed := make(chan string, 1)
+	if err := server.RegisterRoute(31, func(ctx *Context) {
+		routed <- string(ctx.Request.Message.Body)
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
+	connection := newTCPProcessInputTestConnection(t, server)
+
+	valid := encodeTCPTestMessage(t, 31, "one")
+	malformedLengthHeader := []byte{0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff}
+	err := connection.processInput(append(valid, malformedLengthHeader...))
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("processInput() error = %v, want %v", err, ErrFrameTooLarge)
+	}
+	assertNoStringResult(t, routed, "route from malformed TCP batch")
+
+	stats := server.Stats()
+	if stats.TCP.ReceivedMessages != 0 || stats.TCP.ReceivedBytes != 0 {
+		t.Fatalf("TCP receive stats = (%d, %d), want zero", stats.TCP.ReceivedMessages, stats.TCP.ReceivedBytes)
+	}
+	if stats.Total.ReceivedMessages != 0 || stats.Total.ReceivedBytes != 0 {
+		t.Fatalf("Total receive stats = (%d, %d), want zero", stats.Total.ReceivedMessages, stats.Total.ReceivedBytes)
+	}
+	if stats.WebSocket != (TransportStats{}) {
+		t.Fatalf("WebSocket = %+v, want zero value", stats.WebSocket)
+	}
+}
+
 func TestTCPConnectionSplitFrameRoutesExactlyOnce(t *testing.T) {
 	server := newTCPTestServer(t)
 	routed := make(chan string, 2)

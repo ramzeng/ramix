@@ -561,6 +561,7 @@ func (s *Server) reportConnectionError(connection Connection, operation Connecti
 	if err == nil {
 		return
 	}
+	s.metrics.connectionError(transportForStats(connection))
 	callback := s.runtimeError
 	if callback == nil {
 		callback = s.connectionError
