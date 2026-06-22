@@ -131,6 +131,21 @@ func waitForIntegrationResult(t *testing.T, results <-chan error, label string) 
 	}
 }
 
+func waitForIntegrationStats(t *testing.T, server *Server, condition func(ServerStats) bool, label string) ServerStats {
+	t.Helper()
+	deadline := time.Now().Add(integrationTimeout)
+	for time.Now().Before(deadline) {
+		stats := server.Stats()
+		if condition(stats) {
+			return stats
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stats := server.Stats()
+	t.Fatalf("timed out waiting for %s; final Stats() = %+v", label, stats)
+	return ServerStats{}
+}
+
 func waitForTCPListenerClosed(t *testing.T, address string) {
 	t.Helper()
 	deadline := time.Now().Add(integrationTimeout)
@@ -263,6 +278,83 @@ func TestIntegration_TCPRequestResponse(t *testing.T) {
 	assertIntegrationMessage(t, response, 101, "echo:hello")
 }
 
+func TestIntegration_TCPStatisticsSnapshot(t *testing.T) {
+	server := newTCPIntegrationServer(t)
+	if err := server.RegisterRoute(9, func(ctx *Context) {
+		time.Sleep(5 * time.Millisecond)
+		_ = ctx.Connection.Send(ctx, 109, append([]byte("echo:"), ctx.Request.Message.Body...))
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
+	address, run := startIntegrationServerWithContext(t, server, TransportTCP, context.Background())
+
+	client := dialTCPIntegration(t, address)
+	setIntegrationDeadline(t, client)
+	active := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.ActiveConnections == 1
+	}, "one active TCP connection")
+	if active.WebSocket != (TransportStats{}) {
+		t.Fatalf("WebSocket stats after TCP dial = %+v, want zero", active.WebSocket)
+	}
+	if got := active.Total.ActiveConnections; got != 1 {
+		t.Fatalf("Total.ActiveConnections after TCP dial = %d, want 1", got)
+	}
+
+	if _, err := client.Write(encodeIntegrationMessage(t, 9, "hello")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	response, err := readIntegrationMessage(client)
+	if err != nil {
+		t.Fatalf("readIntegrationMessage() error = %v", err)
+	}
+	assertIntegrationMessage(t, response, 109, "echo:hello")
+
+	stats := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.ReceivedMessages == 1 &&
+			stats.TCP.ReceivedBytes == 5 &&
+			stats.TCP.SentMessages == 1 &&
+			stats.TCP.SentBytes == 10 &&
+			stats.TCP.CompletedRequests == 1 &&
+			stats.TCP.QueuedTasks == 0 &&
+			stats.TCP.TotalRequestDuration >= 5*time.Millisecond &&
+			stats.TCP.MaximumRequestDuration == stats.TCP.TotalRequestDuration
+	}, "TCP request statistics")
+	if stats.TCP.ActiveConnections != 1 {
+		t.Fatalf("TCP.ActiveConnections after request = %d, want 1", stats.TCP.ActiveConnections)
+	}
+	if stats.WebSocket != (TransportStats{}) {
+		t.Fatalf("WebSocket stats after TCP request = %+v, want zero", stats.WebSocket)
+	}
+	if stats.Total != stats.TCP {
+		t.Fatalf("Total stats after TCP request = %+v, want TCP stats %+v", stats.Total, stats.TCP)
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("client Close() error = %v", err)
+	}
+	closedStats := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.ActiveConnections == 0 && stats.Total.ActiveConnections == 0
+	}, "TCP active connection gauge to return to zero")
+	wantClosed := stats
+	wantClosed.TCP.ActiveConnections = 0
+	wantClosed.Total.ActiveConnections = 0
+	if closedStats != wantClosed {
+		t.Fatalf("Stats() after TCP client close = %+v, want %+v", closedStats, wantClosed)
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if err := waitForIntegrationRun(t, run); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := server.Stats(); got != closedStats {
+		t.Fatalf("Stats() after TCP shutdown = %+v, want preserved snapshot %+v", got, closedStats)
+	}
+}
+
 func TestIntegration_TCPSplitFrame(t *testing.T) {
 	server := newTCPIntegrationServer(t)
 	registerIntegrationEcho(t, server, 2, 102)
@@ -322,6 +414,15 @@ func TestIntegration_TCPMalformedClientIsIsolated(t *testing.T) {
 	buffer := make([]byte, 1)
 	_, err := malformed.Read(buffer)
 	assertIntegrationConnectionClosed(t, err)
+	stats := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.ConnectionErrors >= 1
+	}, "TCP connection error after malformed client closes")
+	if stats.WebSocket.ConnectionErrors != 0 {
+		t.Fatalf("WebSocket.ConnectionErrors = %d, want 0", stats.WebSocket.ConnectionErrors)
+	}
+	if stats.Total.ConnectionErrors != stats.TCP.ConnectionErrors {
+		t.Fatalf("Total.ConnectionErrors = %d, want TCP.ConnectionErrors %d", stats.Total.ConnectionErrors, stats.TCP.ConnectionErrors)
+	}
 
 	if _, err := healthy.Write(encodeIntegrationMessage(t, 4, "healthy")); err != nil {
 		t.Fatalf("healthy Write() error = %v", err)
@@ -342,6 +443,27 @@ func TestIntegration_TCPConcurrentClientsPreservePerConnectionOrder(t *testing.T
 	const messagesPerClient = 12
 	errCh := make(chan error, clientCount)
 	var wg sync.WaitGroup
+	statsStop := make(chan struct{})
+	statsDone := make(chan struct{})
+	go func() {
+		defer close(statsDone)
+		for {
+			select {
+			case <-statsStop:
+				return
+			default:
+				_ = server.Stats()
+				time.Sleep(time.Microsecond)
+			}
+		}
+	}()
+	var stopStatsOnce sync.Once
+	stopStatsPoller := func() {
+		close(statsStop)
+		<-statsDone
+	}
+	defer stopStatsOnce.Do(stopStatsPoller)
+
 	for clientIndex := 0; clientIndex < clientCount; clientIndex++ {
 		client := dialTCPIntegration(t, address)
 		clientIndex := clientIndex
@@ -391,6 +513,7 @@ func TestIntegration_TCPConcurrentClientsPreservePerConnectionOrder(t *testing.T
 	case <-time.After(integrationTimeout):
 		t.Fatal("concurrent clients did not finish before deadline")
 	}
+	stopStatsOnce.Do(stopStatsPoller)
 	close(errCh)
 	for err := range errCh {
 		if err != nil {
