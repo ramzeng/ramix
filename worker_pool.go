@@ -74,11 +74,14 @@ func (p *workerPool) submit(task *Context) error {
 	}
 
 	p.register(task)
+	task.taskQueued()
 
 	select {
 	case selectedWorker.tasks <- task:
 		return nil
 	default:
+		task.taskDequeued()
+		task.taskRejected()
 		p.unregister(task)
 		return ErrWorkerQueueFull
 	}

@@ -107,6 +107,90 @@ func TestIntegration_WebSocketRequestResponse(t *testing.T) {
 	assertIntegrationMessage(t, response, 111, "echo:hello")
 }
 
+func TestIntegration_WebSocketStatisticsSnapshot(t *testing.T) {
+	server := newWebSocketIntegrationServer(t)
+	if err := server.RegisterRoute(19, func(ctx *Context) {
+		time.Sleep(5 * time.Millisecond)
+		_ = ctx.Connection.Send(ctx, 119, append([]byte("echo:"), ctx.Request.Message.Body...))
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
+	address, run := startIntegrationServerWithContext(t, server, TransportWebSocket, context.Background())
+	rawURL := webSocketIntegrationURL(server, address.String(), false)
+	client := dialWebSocketIntegration(t, nil, rawURL)
+
+	active := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.WebSocket.ActiveConnections == 1
+	}, "one active WebSocket connection")
+	if active.TCP != (TransportStats{}) {
+		t.Fatalf("TCP stats after WebSocket dial = %+v, want zero", active.TCP)
+	}
+	if got := active.Total.ActiveConnections; got != 1 {
+		t.Fatalf("Total.ActiveConnections after WebSocket dial = %d, want 1", got)
+	}
+
+	if err := client.WriteMessage(websocket.BinaryMessage, encodeIntegrationMessage(t, 19, "hello")); err != nil {
+		t.Fatalf("WriteMessage() error = %v", err)
+	}
+	response, err := readWebSocketIntegrationMessage(client)
+	if err != nil {
+		t.Fatalf("readWebSocketIntegrationMessage() error = %v", err)
+	}
+	assertIntegrationMessage(t, response, 119, "echo:hello")
+
+	stats := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.WebSocket.ReceivedMessages == 1 &&
+			stats.WebSocket.ReceivedBytes == 5 &&
+			stats.WebSocket.SentMessages == 1 &&
+			stats.WebSocket.SentBytes == 10 &&
+			stats.WebSocket.CompletedRequests == 1 &&
+			stats.WebSocket.QueuedTasks == 0 &&
+			stats.WebSocket.TotalRequestDuration >= 5*time.Millisecond &&
+			stats.WebSocket.MaximumRequestDuration == stats.WebSocket.TotalRequestDuration
+	}, "WebSocket request statistics")
+	if stats.WebSocket.ActiveConnections != 1 {
+		t.Fatalf("WebSocket.ActiveConnections after request = %d, want 1", stats.WebSocket.ActiveConnections)
+	}
+	if stats.TCP != (TransportStats{}) {
+		t.Fatalf("TCP stats after WebSocket request = %+v, want zero", stats.TCP)
+	}
+	if stats.Total != stats.WebSocket {
+		t.Fatalf("Total stats after WebSocket request = %+v, want WebSocket stats %+v", stats.Total, stats.WebSocket)
+	}
+
+	if err := client.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(integrationTimeout),
+	); err != nil {
+		t.Fatalf("WriteControl(close) error = %v", err)
+	}
+	closedStats := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.WebSocket.ActiveConnections == 0 && stats.Total.ActiveConnections == 0
+	}, "WebSocket active connection gauge to return to zero")
+	wantClosed := stats
+	wantClosed.WebSocket.ActiveConnections = 0
+	wantClosed.Total.ActiveConnections = 0
+	if closedStats != wantClosed {
+		t.Fatalf("Stats() after WebSocket client close = %+v, want %+v", closedStats, wantClosed)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("client Close() error = %v", err)
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if err := waitForIntegrationRun(t, run); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := server.Stats(); got != closedStats {
+		t.Fatalf("Stats() after WebSocket shutdown = %+v, want preserved snapshot %+v", got, closedStats)
+	}
+}
+
 func TestIntegration_WebSocketTextClientIsIsolated(t *testing.T) {
 	server := newWebSocketIntegrationServer(t)
 	registerIntegrationEcho(t, server, 12, 112)
@@ -320,9 +404,24 @@ func TestIntegration_WebSocketWorkerQueueSaturationIsIsolated(t *testing.T) {
 	if queueError.operation != OperationTask || !errors.Is(queueError.err, ErrWorkerQueueFull) {
 		t.Fatalf("reported error = (%q, %v), want (%q, ErrWorkerQueueFull)", queueError.operation, queueError.err, OperationTask)
 	}
+	rejectedStats := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.WebSocket.RejectedTasks == 1
+	}, "WebSocket rejected task after queue saturation")
+	if rejectedStats.Total.RejectedTasks != 1 {
+		t.Fatalf("Total.RejectedTasks = %d, want 1", rejectedStats.Total.RejectedTasks)
+	}
+	if rejectedStats.TCP.RejectedTasks != 0 {
+		t.Fatalf("TCP.RejectedTasks = %d, want 0", rejectedStats.TCP.RejectedTasks)
+	}
 	_, _, err := offending.ReadMessage()
 	assertIntegrationConnectionClosed(t, err)
 	release()
+	drainedStats := waitForIntegrationStats(t, server, func(stats ServerStats) bool {
+		return stats.WebSocket.QueuedTasks == 0
+	}, "WebSocket queued tasks to drain after release")
+	if drainedStats.Total.QueuedTasks != 0 {
+		t.Fatalf("Total.QueuedTasks = %d, want 0", drainedStats.Total.QueuedTasks)
+	}
 
 	if err := healthy.WriteMessage(websocket.BinaryMessage, encodeIntegrationMessage(t, 17, "healthy")); err != nil {
 		t.Fatalf("healthy WriteMessage() error = %v", err)

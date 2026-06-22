@@ -58,7 +58,7 @@ func newWebSocketTestFixture(
 		}
 
 		connectionID := atomic.AddUint64(&server.currentConnectionID, 1)
-		base, err := newNetConnection(connectionID, server, socket, func(data []byte) error {
+		base, err := newNetConnection(connectionID, server, TransportWebSocket, socket, func(data []byte) error {
 			active := fixture.applicationBusy.Add(1)
 			for {
 				maximum := fixture.maxApplication.Load()
@@ -142,6 +142,67 @@ func TestWebSocketConnectionBinaryMessageRoutes(t *testing.T) {
 	}
 	if got := waitForString(t, routed, "websocket binary route"); got != "binary" {
 		t.Fatalf("routed body = %q, want binary", got)
+	}
+}
+
+func TestWebSocketConnectionReceiveStatsCountDecodedMessage(t *testing.T) {
+	fixture := newWebSocketTestFixture(t, nil)
+	routed := make(chan string, 1)
+	if err := fixture.server.RegisterRoute(32, func(ctx *Context) {
+		routed <- string(ctx.Request.Message.Body)
+	}); err != nil {
+		t.Fatalf("RegisterRoute() error = %v", err)
+	}
+	_, client := fixture.dial(t)
+
+	if err := client.WriteMessage(websocket.BinaryMessage, encodeTCPTestMessage(t, 32, "payload")); err != nil {
+		t.Fatalf("WriteMessage() error = %v", err)
+	}
+	if got := waitForString(t, routed, "websocket receive stats route"); got != "payload" {
+		t.Fatalf("routed body = %q, want payload", got)
+	}
+	stats := waitForStats(t, fixture.server, func(stats ServerStats) bool {
+		return stats.WebSocket.ReceivedMessages == 1 && stats.WebSocket.ReceivedBytes == 7
+	}, "WebSocket receive stats for decoded message")
+	if stats.Total != stats.WebSocket {
+		t.Fatalf("Total = %+v, want WebSocket %+v", stats.Total, stats.WebSocket)
+	}
+	if stats.TCP != (TransportStats{}) {
+		t.Fatalf("TCP = %+v, want zero value", stats.TCP)
+	}
+}
+
+func TestWebSocketConnectionReceiveStatsExcludePartialMessage(t *testing.T) {
+	fixture := newWebSocketTestFixture(t, nil)
+	reported := make(chan tcpTestError, 1)
+	fixture.server.connectionError = func(_ Connection, op ConnectionOperation, err error) {
+		reported <- tcpTestError{op: op, err: err}
+	}
+	connection, client := fixture.dial(t)
+
+	partial := encodeTCPTestMessage(t, 33, "payload")[:6]
+	if err := client.WriteMessage(websocket.BinaryMessage, partial); err != nil {
+		t.Fatalf("WriteMessage(partial) error = %v", err)
+	}
+	report := waitForTCPError(t, reported, "websocket partial message protocol error")
+	if report.op != OperationProtocol || !errors.Is(report.err, ErrInvalidFrame) {
+		t.Fatalf("reported error = (%q, %v), want (%q, %v)", report.op, report.err, OperationProtocol, ErrInvalidFrame)
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), time.Second)
+	defer cancelWait()
+	if err := connection.wait(waitCtx); err != nil {
+		t.Fatalf("connection wait error = %v", err)
+	}
+
+	stats := fixture.server.Stats()
+	if stats.WebSocket.ReceivedMessages != 0 || stats.WebSocket.ReceivedBytes != 0 {
+		t.Fatalf("WebSocket receive stats = (%d, %d), want zero", stats.WebSocket.ReceivedMessages, stats.WebSocket.ReceivedBytes)
+	}
+	if stats.Total.ReceivedMessages != 0 || stats.Total.ReceivedBytes != 0 {
+		t.Fatalf("Total receive stats = (%d, %d), want zero", stats.Total.ReceivedMessages, stats.Total.ReceivedBytes)
+	}
+	if stats.TCP.ReceivedMessages != 0 || stats.TCP.ReceivedBytes != 0 {
+		t.Fatalf("TCP receive stats = (%d, %d), want zero", stats.TCP.ReceivedMessages, stats.TCP.ReceivedBytes)
 	}
 }
 

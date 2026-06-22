@@ -18,6 +18,7 @@ Ramix is a lightweight Go framework for TCP and WebSocket servers. It provides f
 - Independent read and write paths
 - Connection heartbeat detection and lifecycle hooks
 - TCP, WebSocket, and TLS support
+- Aggregate and per-transport runtime statistics
 - Malformed-frame isolation: an invalid client is disconnected without stopping other connections or the server
 - Atomic startup and phased graceful shutdown
 
@@ -99,6 +100,23 @@ err := connection.Send(ctx, event, body)
 ```
 
 The context can cancel a blocked send. Inside a route handler, pass the Ramix handler context as shown in the quick-start example.
+
+## Statistics
+
+Use `server.Stats()` to read aggregate and per-transport runtime statistics:
+
+```go
+stats := server.Stats()
+log.Printf("connections=%d received=%d sent=%d queued=%d rejected=%d",
+	stats.Total.ActiveConnections,
+	stats.Total.ReceivedMessages,
+	stats.Total.SentMessages,
+	stats.Total.QueuedTasks,
+	stats.Total.RejectedTasks,
+)
+```
+
+Counters accumulate from server construction and remain readable after shutdown. Each field is atomically loaded, but the snapshot is not transactionally consistent across fields. Received and sent byte values count message bodies and exclude Ramix and transport headers.
 
 ## Worker Pool
 

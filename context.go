@@ -3,6 +3,7 @@ package ramix
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 type Context struct {
@@ -16,6 +17,9 @@ type Context struct {
 	lock     sync.RWMutex
 	cancel   context.CancelFunc
 	finishMu sync.Once
+
+	metrics         *serverMetrics
+	metricTransport Transport
 }
 
 func (c *Context) Next() {
@@ -54,6 +58,34 @@ func (c *Context) finish() {
 	c.finishMu.Do(func() {
 		c.cancelTask()
 	})
+}
+
+func (c *Context) taskQueued() {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.taskQueued(c.metricTransport)
+}
+
+func (c *Context) taskDequeued() {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.taskDequeued(c.metricTransport)
+}
+
+func (c *Context) taskRejected() {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.taskRejected(c.metricTransport)
+}
+
+func (c *Context) requestCompleted(duration time.Duration) {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.requestCompleted(c.metricTransport, duration)
 }
 
 func newContext(parent context.Context, connection Connection, request *Request) *Context {

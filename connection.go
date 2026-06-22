@@ -38,12 +38,13 @@ type managedConnection interface {
 }
 
 type netConnection struct {
-	id           uint64
-	server       *Server
-	transport    connectionTransport
-	writeMessage func([]byte) error
-	frameDecoder *FrameDecoder
-	activity     *activityClock
+	id              uint64
+	server          *Server
+	metricTransport Transport
+	transport       connectionTransport
+	writeMessage    func([]byte) error
+	frameDecoder    *FrameDecoder
+	activity        *activityClock
 
 	state   atomic.Uint32
 	stateMu sync.Mutex
@@ -65,6 +66,7 @@ type netConnection struct {
 	children   sync.WaitGroup
 	writerDone chan struct{}
 	done       chan struct{}
+	started    atomic.Bool
 
 	startOnce          sync.Once
 	quiesceOnce        sync.Once
@@ -82,6 +84,7 @@ type netConnection struct {
 func newNetConnection(
 	connectionID uint64,
 	server *Server,
+	metricTransport Transport,
 	transport connectionTransport,
 	writeMessage func([]byte) error,
 ) (*netConnection, error) {
@@ -99,23 +102,24 @@ func newNetConnection(
 	forceCtx, forceCancel := context.WithCancel(context.Background())
 
 	connection := &netConnection{
-		id:             connectionID,
-		server:         server,
-		transport:      transport,
-		writeMessage:   writeMessage,
-		frameDecoder:   frameDecoder,
-		activity:       newActivityClock(time.Now),
-		readCtx:        readCtx,
-		readCancel:     readCancel,
-		sendCtx:        sendCtx,
-		sendCancel:     sendCancel,
-		forceCtx:       forceCtx,
-		forceCancel:    forceCancel,
-		acceptingSends: true,
-		outgoing:       make(chan []byte, server.ConnectionWriteBufferSize),
-		drainWriter:    make(chan struct{}),
-		writerDone:     make(chan struct{}),
-		done:           make(chan struct{}),
+		id:              connectionID,
+		server:          server,
+		metricTransport: metricTransport,
+		transport:       transport,
+		writeMessage:    writeMessage,
+		frameDecoder:    frameDecoder,
+		activity:        newActivityClock(time.Now),
+		readCtx:         readCtx,
+		readCancel:      readCancel,
+		sendCtx:         sendCtx,
+		sendCancel:      sendCancel,
+		forceCtx:        forceCtx,
+		forceCancel:     forceCancel,
+		acceptingSends:  true,
+		outgoing:        make(chan []byte, server.ConnectionWriteBufferSize),
+		drainWriter:     make(chan struct{}),
+		writerDone:      make(chan struct{}),
+		done:            make(chan struct{}),
 	}
 	connection.state.Store(uint32(connectionOpen))
 	connection.activity.refresh()
@@ -132,6 +136,10 @@ func (c *netConnection) RemoteAddress() net.Addr {
 		return nil
 	}
 	return c.transport.RemoteAddr()
+}
+
+func (c *netConnection) statsTransport() Transport {
+	return c.metricTransport
 }
 
 func (c *netConnection) taskContext() context.Context {
@@ -176,6 +184,8 @@ func (c *netConnection) Send(ctx context.Context, event uint32, body []byte) err
 func (c *netConnection) start(self managedConnection, reader func()) {
 	c.startOnce.Do(func() {
 		c.self = self
+		c.server.metrics.connectionOpened(c.statsTransport())
+		c.started.Store(true)
 		c.children.Add(3)
 		openHookDone := make(chan struct{})
 
@@ -212,7 +222,7 @@ func (c *netConnection) runWriter() {
 		case <-c.forceCtx.Done():
 			return
 		case data := <-c.outgoing:
-			if err := c.writeMessage(data); err != nil {
+			if err := c.writeOutgoing(data); err != nil {
 				if c.tryRequestClose(OperationWrite, err) {
 					c.server.reportConnectionError(c.self, OperationWrite, err)
 				}
@@ -222,7 +232,7 @@ func (c *netConnection) runWriter() {
 			for {
 				select {
 				case data := <-c.outgoing:
-					if err := c.writeMessage(data); err != nil {
+					if err := c.writeOutgoing(data); err != nil {
 						if c.tryRequestClose(OperationWrite, err) {
 							c.server.reportConnectionError(c.self, OperationWrite, err)
 						}
@@ -234,6 +244,16 @@ func (c *netConnection) runWriter() {
 			}
 		}
 	}
+}
+
+func (c *netConnection) writeOutgoing(data []byte) error {
+	if err := c.writeMessage(data); err != nil {
+		return err
+	}
+	if len(data) >= 8 {
+		c.server.metrics.messageSent(c.statsTransport(), uint64(len(data)-8))
+	}
+	return nil
 }
 
 func (c *netConnection) quiesceReads() error {
@@ -332,6 +352,11 @@ func (c *netConnection) supervise(openHookDone <-chan struct{}) {
 		c.closeTransport()
 		if c.self != nil {
 			c.server.connectionManager.removeConnection(c.self)
+		}
+		if c.started.Load() {
+			c.server.metrics.connectionClosed(c.statsTransport())
+		}
+		if c.self != nil {
 			c.server.invokeCloseHook(c.self)
 		}
 		c.stateMu.Lock()

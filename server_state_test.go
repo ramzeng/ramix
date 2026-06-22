@@ -419,6 +419,94 @@ func TestHookAndErrorHandlerPanicsAreRecovered(t *testing.T) {
 	server.reportConnectionError(connection, OperationRead, errors.New("read failed"))
 }
 
+type statsTransportTestConnection struct {
+	testConnection
+	transport Transport
+}
+
+func (c *statsTransportTestConnection) statsTransport() Transport {
+	return c.transport
+}
+
+func TestReportConnectionErrorCountsBeforeApplicationCallback(t *testing.T) {
+	tests := []struct {
+		name              string
+		configureCallback func(*testing.T, *Server, *atomic.Int32)
+		wantCallbacks     int32
+	}{
+		{
+			name: "normal callback",
+			configureCallback: func(t *testing.T, server *Server, callbacks *atomic.Int32) {
+				t.Helper()
+				server.connectionError = func(connection Connection, operation ConnectionOperation, err error) {
+					callbacks.Add(1)
+					if connection.ID() != 1 {
+						t.Errorf("connection ID = %d, want 1", connection.ID())
+					}
+					if operation != OperationRead {
+						t.Errorf("operation = %q, want %q", operation, OperationRead)
+					}
+					if err == nil {
+						t.Error("callback error = nil, want non-nil")
+					}
+					if got := server.Stats().TCP.ConnectionErrors; got != 1 {
+						t.Errorf("TCP.ConnectionErrors in callback = %d, want 1", got)
+					}
+				}
+			},
+			wantCallbacks: 1,
+		},
+		{
+			name:          "no callback",
+			wantCallbacks: 0,
+		},
+		{
+			name: "panicking callback",
+			configureCallback: func(t *testing.T, server *Server, callbacks *atomic.Int32) {
+				t.Helper()
+				server.connectionError = func(Connection, ConnectionOperation, error) {
+					callbacks.Add(1)
+					if got := server.Stats().TCP.ConnectionErrors; got != 1 {
+						t.Errorf("TCP.ConnectionErrors in callback = %d, want 1", got)
+					}
+					panic("connection error callback panic")
+				}
+			},
+			wantCallbacks: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newLifecycleServer(t, TransportTCP)
+			var callbacks atomic.Int32
+			if test.configureCallback != nil {
+				test.configureCallback(t, server, &callbacks)
+			}
+			connection := &statsTransportTestConnection{
+				testConnection: testConnection{id: 1},
+				transport:      TransportTCP,
+			}
+
+			server.reportConnectionError(connection, OperationRead, errors.New("read failed"))
+
+			if got := callbacks.Load(); got != test.wantCallbacks {
+				t.Fatalf("callback count = %d, want %d", got, test.wantCallbacks)
+			}
+			stats := server.Stats()
+			if got, want := stats.TCP.ConnectionErrors, uint64(1); got != want {
+				t.Fatalf("TCP.ConnectionErrors = %d, want %d", got, want)
+			}
+			if got, want := stats.Total.ConnectionErrors, uint64(1); got != want {
+				t.Fatalf("Total.ConnectionErrors = %d, want %d", got, want)
+			}
+			if got := stats.WebSocket.ConnectionErrors; got != 0 {
+				t.Fatalf("WebSocket.ConnectionErrors = %d, want 0", got)
+			}
+		})
+	}
+}
+
 func TestServerShutdownTimeoutForNonCooperativeHandler(t *testing.T) {
 	server, err := NewServer(
 		WithTransports(TransportTCP),

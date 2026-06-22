@@ -117,7 +117,7 @@ func newLifecycleTestConnection(t *testing.T, transport *fakeLifecycleTransport,
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	connection, err := newNetConnection(1, server, transport, transport.Write)
+	connection, err := newNetConnection(1, server, TransportTCP, transport, transport.Write)
 	if err != nil {
 		t.Fatalf("newNetConnection() error = %v", err)
 	}
@@ -129,6 +129,80 @@ func startLifecycleTestConnection(server *Server, connection *netConnection, tra
 	connection.start(connection, func() {
 		_, _ = transport.Read(make([]byte, 1))
 	})
+}
+
+func TestConnectionMetricsTrackLifecycleAndSuccessfulWrites(t *testing.T) {
+	transport := newFakeLifecycleTransport()
+	server, connection := newLifecycleTestConnection(t, transport, 1)
+	startLifecycleTestConnection(server, connection, transport)
+
+	waitForStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.ActiveConnections == 1
+	}, "TCP connection to become active")
+
+	if err := connection.Send(context.Background(), 1, []byte("body")); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	waitForStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.SentMessages == 1 && stats.TCP.SentBytes == 4
+	}, "successful TCP write to be counted")
+
+	connection.requestClose(OperationRead, net.ErrClosed)
+	if err := connection.wait(context.Background()); err != nil {
+		t.Fatalf("wait() error = %v", err)
+	}
+	stats := waitForStats(t, server, func(stats ServerStats) bool {
+		return stats.TCP.ActiveConnections == 0
+	}, "TCP connection to become inactive")
+	if stats.Total != stats.TCP {
+		t.Fatalf("Total = %+v, want TCP %+v", stats.Total, stats.TCP)
+	}
+}
+
+func TestConnectionMetricsIgnoreShortSuccessfulWrite(t *testing.T) {
+	transport := newFakeLifecycleTransport()
+	server, connection := newLifecycleTestConnection(t, transport, 1)
+
+	if err := connection.writeOutgoing([]byte("short")); err != nil {
+		t.Fatalf("writeOutgoing(short) error = %v", err)
+	}
+
+	stats := server.Stats()
+	if stats.TCP.SentMessages != 0 || stats.TCP.SentBytes != 0 {
+		t.Fatalf("TCP sent metrics = (%d, %d), want zero after short successful write", stats.TCP.SentMessages, stats.TCP.SentBytes)
+	}
+}
+
+func TestConnectionMetricsDoNotCountFailedWrite(t *testing.T) {
+	transport := newFakeLifecycleTransport()
+	server, err := NewServer(
+		WithHeartbeatInterval(time.Hour),
+		WithHeartbeatTimeout(2*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	writeErr := errors.New("known write error")
+	connection, err := newNetConnection(1, server, TransportTCP, transport, func([]byte) error {
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("newNetConnection() error = %v", err)
+	}
+	startLifecycleTestConnection(server, connection, transport)
+
+	if err := connection.Send(context.Background(), 1, []byte("body")); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if err := connection.wait(context.Background()); err != nil {
+		t.Fatalf("wait() error = %v", err)
+	}
+
+	stats := server.Stats()
+	if stats.TCP.SentMessages != 0 || stats.TCP.SentBytes != 0 {
+		t.Fatalf("TCP sent metrics = (%d, %d), want zero after failed write", stats.TCP.SentMessages, stats.TCP.SentBytes)
+	}
 }
 
 func TestConnectionConcurrentCloseRequestsCloseTransportOnce(t *testing.T) {

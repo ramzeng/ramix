@@ -26,6 +26,7 @@ type Server struct {
 	decoder             DecoderInterface
 	encoder             EncoderInterface
 	connectionManager   *connectionManager
+	metrics             serverMetrics
 
 	connectionOpen  func(Connection)
 	connectionClose func(Connection)
@@ -474,6 +475,8 @@ func (s *Server) handleRequest(connection Connection, request *Request) error {
 		parent = provider.taskContext()
 	}
 	ctx := newContext(parent, connection, request)
+	ctx.metrics = &s.metrics
+	ctx.metricTransport = transportForStats(connection)
 	routes := s.runtimeRoutes
 	if routes == nil {
 		routes = s.router.freeze()
@@ -560,6 +563,7 @@ func (s *Server) reportConnectionError(connection Connection, operation Connecti
 	if err == nil {
 		return
 	}
+	s.metrics.connectionError(transportForStats(connection))
 	callback := s.runtimeError
 	if callback == nil {
 		callback = s.connectionError
@@ -577,7 +581,7 @@ func (s *Server) reportConnectionError(connection Connection, operation Connecti
 }
 
 func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID uint64) {
-	base, err := newNetConnection(connectionID, s, socket, func(data []byte) error {
+	base, err := newNetConnection(connectionID, s, TransportWebSocket, socket, func(data []byte) error {
 		return socket.WriteMessage(websocket.BinaryMessage, data)
 	})
 	if err != nil {
@@ -590,7 +594,7 @@ func (s *Server) openWebSocketConnection(socket *websocket.Conn, connectionID ui
 }
 
 func (s *Server) openTCPConnection(socket net.Conn, connectionID uint64) {
-	base, err := newNetConnection(connectionID, s, socket, func(data []byte) error {
+	base, err := newNetConnection(connectionID, s, TransportTCP, socket, func(data []byte) error {
 		return writeFull(socket, data)
 	})
 	if err != nil {
