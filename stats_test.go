@@ -38,11 +38,11 @@ func TestServerStatsStartsAtZeroAndIsDetached(t *testing.T) {
 	if got := server.Stats(); got != (ServerStats{}) {
 		t.Fatalf("Stats() after caller mutation = %+v, want detached zero value", got)
 	}
-	if err := server.Shutdown(nil); err != nil {
-		t.Fatalf("Shutdown(nil) error = %v", err)
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
 	}
 	if got := server.Stats(); got != (ServerStats{}) {
-		t.Fatalf("Stats() after Shutdown(nil) = %+v, want zero value", got)
+		t.Fatalf("Stats() after Shutdown() = %+v, want zero value", got)
 	}
 
 	server.metrics.connectionOpened(TransportTCP)
