@@ -194,6 +194,190 @@ func TestWorkerPoolSubmitReturnsQueueFullImmediately(t *testing.T) {
 	}
 }
 
+func TestWorkerPoolMetricsTrackQueuedAndRejectedTasks(t *testing.T) {
+	pool := newWorkerPool(1, 1)
+	pool.start()
+
+	var metrics serverMetrics
+	block := make(chan struct{})
+	started := make(chan struct{})
+
+	first := newMetricsContext(&metrics, TransportTCP, 1)
+	first.handlers = []Handler{
+		func(*Context) {
+			close(started)
+			<-block
+		},
+	}
+
+	second := newMetricsContext(&metrics, TransportTCP, 1)
+	second.handlers = []Handler{func(*Context) {}}
+
+	third := newMetricsContext(&metrics, TransportTCP, 1)
+	third.handlers = []Handler{func(*Context) {}}
+
+	if err := pool.submit(first); err != nil {
+		t.Fatalf("submit(first) error = %v", err)
+	}
+	waitForSignal(t, started, "first metric task start")
+
+	if err := pool.submit(second); err != nil {
+		t.Fatalf("submit(second) error = %v", err)
+	}
+	if got := metrics.snapshot().TCP.QueuedTasks; got != 1 {
+		t.Fatalf("queued tasks while second task waits = %d, want 1", got)
+	}
+
+	if err := pool.submit(third); !errors.Is(err, ErrWorkerQueueFull) {
+		t.Fatalf("submit(third) error = %v, want %v", err, ErrWorkerQueueFull)
+	}
+	if got := metrics.snapshot().TCP.RejectedTasks; got != 1 {
+		t.Fatalf("rejected tasks after queue-full submit = %d, want 1", got)
+	}
+
+	close(block)
+
+	if err := pool.stopAcceptingAndDrain(context.Background()); err != nil {
+		t.Fatalf("stopAcceptingAndDrain() error = %v", err)
+	}
+	if got := metrics.snapshot().TCP.QueuedTasks; got != 0 {
+		t.Fatalf("queued tasks after drain = %d, want 0", got)
+	}
+}
+
+func TestWorkerMetricsCanceledTaskIsDequeuedButNotCompleted(t *testing.T) {
+	pool := newWorkerPool(1, 1)
+	pool.start()
+
+	var metrics serverMetrics
+	task := newMetricsContext(&metrics, TransportTCP, 1)
+	task.cancelTask()
+	task.handlers = []Handler{
+		func(*Context) {
+			t.Fatal("canceled task handler should not run")
+		},
+	}
+
+	if err := pool.submit(task); err != nil {
+		t.Fatalf("submit(canceled) error = %v", err)
+	}
+	if err := pool.stopAcceptingAndDrain(context.Background()); err != nil {
+		t.Fatalf("stopAcceptingAndDrain() error = %v", err)
+	}
+
+	stats := metrics.snapshot().TCP
+	if stats.QueuedTasks != 0 {
+		t.Fatalf("queued tasks after canceled task drains = %d, want 0", stats.QueuedTasks)
+	}
+	if stats.CompletedRequests != 0 {
+		t.Fatalf("completed requests after canceled task drains = %d, want 0", stats.CompletedRequests)
+	}
+}
+
+func TestWorkerPoolMetricsDoNotRejectWhenStopping(t *testing.T) {
+	pool := newWorkerPool(1, 1)
+	pool.start()
+	pool.stopAccepting()
+	t.Cleanup(func() {
+		if err := pool.stopAcceptingAndDrain(context.Background()); err != nil {
+			t.Fatalf("stopAcceptingAndDrain() error = %v", err)
+		}
+	})
+
+	var metrics serverMetrics
+	task := newMetricsContext(&metrics, TransportTCP, 1)
+	task.handlers = []Handler{func(*Context) {}}
+
+	if err := pool.submit(task); !errors.Is(err, ErrServerStopping) {
+		t.Fatalf("submit() while stopping error = %v, want %v", err, ErrServerStopping)
+	}
+	stats := metrics.snapshot().TCP
+	if stats.QueuedTasks != 0 {
+		t.Fatalf("queued tasks after stopped submit = %d, want 0", stats.QueuedTasks)
+	}
+	if stats.RejectedTasks != 0 {
+		t.Fatalf("rejected tasks after stopped submit = %d, want 0", stats.RejectedTasks)
+	}
+}
+
+func TestWorkerMetricsRecordCompletedRequestDuration(t *testing.T) {
+	pool := newWorkerPool(1, 1)
+	pool.start()
+
+	var metrics serverMetrics
+	task := newMetricsContext(&metrics, TransportWebSocket, 1)
+	task.handlers = []Handler{
+		func(*Context) {
+			time.Sleep(5 * time.Millisecond)
+		},
+	}
+
+	if err := pool.submit(task); err != nil {
+		t.Fatalf("submit(task) error = %v", err)
+	}
+	if err := pool.stopAcceptingAndDrain(context.Background()); err != nil {
+		t.Fatalf("stopAcceptingAndDrain() error = %v", err)
+	}
+
+	stats := metrics.snapshot().WebSocket
+	if stats.CompletedRequests != 1 {
+		t.Fatalf("completed requests = %d, want 1", stats.CompletedRequests)
+	}
+	if stats.TotalRequestDuration < 5*time.Millisecond {
+		t.Fatalf("total request duration = %s, want at least 5ms", stats.TotalRequestDuration)
+	}
+	if stats.MaximumRequestDuration != stats.TotalRequestDuration {
+		t.Fatalf("maximum request duration = %s, want total duration %s", stats.MaximumRequestDuration, stats.TotalRequestDuration)
+	}
+}
+
+func TestWorkerMetricsExcludeQueueWaitFromDuration(t *testing.T) {
+	pool := newWorkerPool(1, 1)
+	pool.start()
+
+	block := make(chan struct{})
+	started := make(chan struct{})
+
+	first := newContext(context.Background(), &testConnection{id: 1}, nil)
+	first.handlers = []Handler{
+		func(*Context) {
+			close(started)
+			<-block
+		},
+	}
+
+	var metrics serverMetrics
+	second := newMetricsContext(&metrics, TransportTCP, 1)
+	second.handlers = []Handler{
+		func(*Context) {
+			time.Sleep(5 * time.Millisecond)
+		},
+	}
+
+	if err := pool.submit(first); err != nil {
+		t.Fatalf("submit(first) error = %v", err)
+	}
+	waitForSignal(t, started, "unattributed task start")
+
+	if err := pool.submit(second); err != nil {
+		t.Fatalf("submit(second) error = %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(block)
+
+	if err := pool.stopAcceptingAndDrain(context.Background()); err != nil {
+		t.Fatalf("stopAcceptingAndDrain() error = %v", err)
+	}
+
+	duration := metrics.snapshot().TCP.TotalRequestDuration
+	if duration < 5*time.Millisecond {
+		t.Fatalf("total request duration = %s, want at least 5ms", duration)
+	}
+	if duration >= 100*time.Millisecond {
+		t.Fatalf("total request duration = %s, want queue wait excluded below 100ms", duration)
+	}
+}
+
 func TestWorkerPoolStopAcceptingAndDrainDrainsQueuedTasks(t *testing.T) {
 	pool := newWorkerPool(1, 2)
 	pool.start()
@@ -563,4 +747,11 @@ func assertNotClosed(t *testing.T, ch <-chan struct{}, label string) {
 		t.Fatalf("%s unexpectedly closed", label)
 	default:
 	}
+}
+
+func newMetricsContext(metrics *serverMetrics, transport Transport, connectionID uint64) *Context {
+	task := newContext(context.Background(), &testConnection{id: connectionID}, nil)
+	task.metrics = metrics
+	task.metricTransport = transport
+	return task
 }

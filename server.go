@@ -475,6 +475,8 @@ func (s *Server) handleRequest(connection Connection, request *Request) error {
 		parent = provider.taskContext()
 	}
 	ctx := newContext(parent, connection, request)
+	ctx.metrics = &s.metrics
+	ctx.metricTransport = transportForStats(connection)
 	routes := s.runtimeRoutes
 	if routes == nil {
 		routes = s.router.freeze()

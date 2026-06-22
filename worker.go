@@ -1,5 +1,7 @@
 package ramix
 
+import "time"
+
 type worker struct {
 	id    int
 	tasks chan *Context
@@ -17,6 +19,7 @@ func (w *worker) start() {
 			}
 
 			func() {
+				task.taskDequeued()
 				defer task.finish()
 				defer w.pool.unregister(task)
 
@@ -24,7 +27,9 @@ func (w *worker) start() {
 					return
 				}
 
+				started := time.Now()
 				task.Next()
+				task.requestCompleted(time.Since(started))
 			}()
 		}
 
