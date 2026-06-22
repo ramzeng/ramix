@@ -29,11 +29,13 @@ type TransportStats struct {
 	QueuedTasks uint64
 	// ReceivedMessages is the lifetime-cumulative number of received messages.
 	ReceivedMessages uint64
-	// ReceivedBytes is the lifetime-cumulative number of received message bytes.
+	// ReceivedBytes is the lifetime-cumulative number of received message body
+	// bytes, excluding Ramix protocol headers and transport overhead.
 	ReceivedBytes uint64
 	// SentMessages is the lifetime-cumulative number of sent messages.
 	SentMessages uint64
-	// SentBytes is the lifetime-cumulative number of sent message bytes.
+	// SentBytes is the lifetime-cumulative number of sent message body bytes,
+	// excluding Ramix protocol headers and transport overhead.
 	SentBytes uint64
 	// RejectedTasks is the lifetime-cumulative number of rejected tasks.
 	RejectedTasks uint64
@@ -67,8 +69,8 @@ type transportMetrics struct {
 	maximumRequestDuration atomic.Uint64
 }
 
-// Stats returns a detached, approximate point-in-time snapshot of the
-// server's lifetime-cumulative statistics.
+// Stats returns a detached, approximate point-in-time snapshot of the server's
+// lifetime-cumulative counters and current gauges.
 func (s *Server) Stats() ServerStats {
 	return s.metrics.snapshot()
 }
