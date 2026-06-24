@@ -118,6 +118,22 @@ log.Printf("connections=%d received=%d sent=%d queued=%d rejected=%d",
 
 计数器从服务端构造开始累积，并且在关闭后仍可读取。每个字段都会以原子方式加载，但快照在不同字段之间不是事务一致的。接收和发送的字节值只统计消息体，不包含 Ramix 和传输层头部。
 
+## 导出运行统计
+
+Ramix 提供基于标准库的 HTTP handler，用于暴露 `server.Stats()`：
+
+```go
+adminMux := http.NewServeMux()
+adminMux.Handle("/stats", ramix.StatsJSONHandler(server))
+adminMux.Handle("/metrics", ramix.StatsPrometheusHandler(server))
+
+go func() {
+	_ = http.ListenAndServe(":9090", adminMux)
+}()
+```
+
+`/stats` 返回包含 `total`、`tcp` 和 `websocket` 快照的 JSON。`/metrics` 返回按传输类型划分的 Prometheus 文本格式指标。Ramix 只提供 handler；应用负责 admin server、认证和关闭流程。
+
 ## 工作池
 
 Ramix 内部管理固定的工作池。使用 `WithWorkerCount` 和 `WithWorkerQueueCapacity` 在构造时配置工作池。同一连接的任务保持有序，不同连接的任务可以并发执行。
