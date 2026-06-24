@@ -1,6 +1,29 @@
 package ramix
 
-import "net/http"
+import (
+	"encoding/json"
+	"net/http"
+)
+
+type statsJSONSnapshot struct {
+	Total     statsJSONTransport `json:"total"`
+	TCP       statsJSONTransport `json:"tcp"`
+	WebSocket statsJSONTransport `json:"websocket"`
+}
+
+type statsJSONTransport struct {
+	ActiveConnections        uint64 `json:"active_connections"`
+	QueuedTasks              uint64 `json:"queued_tasks"`
+	ReceivedMessages         uint64 `json:"received_messages"`
+	ReceivedBytes            uint64 `json:"received_bytes"`
+	SentMessages             uint64 `json:"sent_messages"`
+	SentBytes                uint64 `json:"sent_bytes"`
+	RejectedTasks            uint64 `json:"rejected_tasks"`
+	ConnectionErrors         uint64 `json:"connection_errors"`
+	CompletedRequests        uint64 `json:"completed_requests"`
+	TotalRequestDurationNS   int64  `json:"total_request_duration_ns"`
+	MaximumRequestDurationNS int64  `json:"maximum_request_duration_ns"`
+}
 
 // StatsJSONHandler returns an HTTP handler that exports server statistics as JSON.
 func StatsJSONHandler(server *Server) http.Handler {
@@ -12,7 +35,9 @@ func StatsJSONHandler(server *Server) http.Handler {
 		if request.Method == http.MethodHead {
 			return
 		}
-		_, _ = writer.Write([]byte("{}\n"))
+		if err := json.NewEncoder(writer).Encode(statsJSONSnapshotFrom(server.Stats())); err != nil {
+			return
+		}
 	})
 }
 
@@ -45,4 +70,28 @@ func requireStatsExportServer(writer http.ResponseWriter, server *Server) bool {
 	}
 	http.Error(writer, "ramix stats server is nil", http.StatusInternalServerError)
 	return false
+}
+
+func statsJSONSnapshotFrom(stats ServerStats) statsJSONSnapshot {
+	return statsJSONSnapshot{
+		Total:     statsJSONTransportFrom(stats.Total),
+		TCP:       statsJSONTransportFrom(stats.TCP),
+		WebSocket: statsJSONTransportFrom(stats.WebSocket),
+	}
+}
+
+func statsJSONTransportFrom(stats TransportStats) statsJSONTransport {
+	return statsJSONTransport{
+		ActiveConnections:        stats.ActiveConnections,
+		QueuedTasks:              stats.QueuedTasks,
+		ReceivedMessages:         stats.ReceivedMessages,
+		ReceivedBytes:            stats.ReceivedBytes,
+		SentMessages:             stats.SentMessages,
+		SentBytes:                stats.SentBytes,
+		RejectedTasks:            stats.RejectedTasks,
+		ConnectionErrors:         stats.ConnectionErrors,
+		CompletedRequests:        stats.CompletedRequests,
+		TotalRequestDurationNS:   int64(stats.TotalRequestDuration),
+		MaximumRequestDurationNS: int64(stats.MaximumRequestDuration),
+	}
 }
