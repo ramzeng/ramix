@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -134,6 +135,46 @@ func TestStatsPrometheusHandlerHeadOmitsBody(t *testing.T) {
 	assertContentType(t, recorder, "text/plain; version=0.0.4; charset=utf-8")
 	if got := recorder.Body.String(); got != "" {
 		t.Fatalf("HEAD body = %q, want empty", got)
+	}
+}
+
+func TestStatsExportHandlersServeConcurrentlyWithMetricUpdates(t *testing.T) {
+	server := newStatsExportServer(t)
+	handlers := []http.Handler{
+		StatsJSONHandler(server),
+		StatsPrometheusHandler(server),
+	}
+
+	var waitGroup sync.WaitGroup
+	start := make(chan struct{})
+	errors := make(chan string, 32)
+	for workerID := 0; workerID < 8; workerID++ {
+		waitGroup.Add(1)
+		go func(workerID int) {
+			defer waitGroup.Done()
+			<-start
+			for iteration := 0; iteration < 100; iteration++ {
+				server.metrics.connectionOpened(TransportTCP)
+				server.metrics.connectionClosed(TransportTCP)
+				server.metrics.messageReceived(TransportWebSocket, uint64(iteration))
+				server.metrics.requestCompleted(TransportTCP, time.Duration(iteration)*time.Nanosecond)
+
+				recorder := httptest.NewRecorder()
+				handler := handlers[(workerID+iteration)%len(handlers)]
+				handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/stats", nil))
+				if recorder.Code != http.StatusOK {
+					errors <- recorder.Body.String()
+					return
+				}
+			}
+		}(workerID)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Fatalf("concurrent stats export request failed: %s", err)
 	}
 }
 
