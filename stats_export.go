@@ -2,8 +2,18 @@ package ramix
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 )
+
+type prometheusMetric struct {
+	name  string
+	help  string
+	typ   string
+	value func(TransportStats) string
+}
 
 type statsJSONSnapshot struct {
 	Total     statsJSONTransport `json:"total"`
@@ -23,6 +33,75 @@ type statsJSONTransport struct {
 	CompletedRequests        uint64 `json:"completed_requests"`
 	TotalRequestDurationNS   int64  `json:"total_request_duration_ns"`
 	MaximumRequestDurationNS int64  `json:"maximum_request_duration_ns"`
+}
+
+var statsPrometheusMetrics = []prometheusMetric{
+	{
+		name:  "ramix_active_connections",
+		help:  "Approximate number of currently open Ramix connections.",
+		typ:   "gauge",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.ActiveConnections }),
+	},
+	{
+		name:  "ramix_queued_tasks",
+		help:  "Approximate number of Ramix request tasks currently waiting to run.",
+		typ:   "gauge",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.QueuedTasks }),
+	},
+	{
+		name:  "ramix_received_messages_total",
+		help:  "Lifetime-cumulative number of received Ramix messages.",
+		typ:   "counter",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.ReceivedMessages }),
+	},
+	{
+		name:  "ramix_received_bytes_total",
+		help:  "Lifetime-cumulative number of received Ramix message body bytes, excluding protocol headers and transport overhead.",
+		typ:   "counter",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.ReceivedBytes }),
+	},
+	{
+		name:  "ramix_sent_messages_total",
+		help:  "Lifetime-cumulative number of sent Ramix messages.",
+		typ:   "counter",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.SentMessages }),
+	},
+	{
+		name:  "ramix_sent_bytes_total",
+		help:  "Lifetime-cumulative number of sent Ramix message body bytes, excluding protocol headers and transport overhead.",
+		typ:   "counter",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.SentBytes }),
+	},
+	{
+		name:  "ramix_rejected_tasks_total",
+		help:  "Lifetime-cumulative number of Ramix request tasks rejected because worker queues were full.",
+		typ:   "counter",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.RejectedTasks }),
+	},
+	{
+		name:  "ramix_connection_errors_total",
+		help:  "Lifetime-cumulative number of reported Ramix connection errors.",
+		typ:   "counter",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.ConnectionErrors }),
+	},
+	{
+		name:  "ramix_completed_requests_total",
+		help:  "Lifetime-cumulative number of completed Ramix request handlers.",
+		typ:   "counter",
+		value: prometheusUint64(func(stats TransportStats) uint64 { return stats.CompletedRequests }),
+	},
+	{
+		name:  "ramix_request_duration_seconds_total",
+		help:  "Saturated lifetime-cumulative Ramix request handler duration in seconds.",
+		typ:   "counter",
+		value: prometheusDurationSeconds(func(stats TransportStats) time.Duration { return stats.TotalRequestDuration }),
+	},
+	{
+		name:  "ramix_request_duration_seconds_max",
+		help:  "Maximum observed Ramix request handler duration in seconds.",
+		typ:   "gauge",
+		value: prometheusDurationSeconds(func(stats TransportStats) time.Duration { return stats.MaximumRequestDuration }),
+	},
 }
 
 // StatsJSONHandler returns an HTTP handler that exports server statistics as JSON.
@@ -52,6 +131,7 @@ func StatsPrometheusHandler(server *Server) http.Handler {
 		if request.Method == http.MethodHead {
 			return
 		}
+		writePrometheusStats(writer, server.Stats())
 	})
 }
 
@@ -93,5 +173,26 @@ func statsJSONTransportFrom(stats TransportStats) statsJSONTransport {
 		CompletedRequests:        stats.CompletedRequests,
 		TotalRequestDurationNS:   int64(stats.TotalRequestDuration),
 		MaximumRequestDurationNS: int64(stats.MaximumRequestDuration),
+	}
+}
+
+func writePrometheusStats(writer http.ResponseWriter, stats ServerStats) {
+	for _, metric := range statsPrometheusMetrics {
+		_, _ = fmt.Fprintf(writer, "# HELP %s %s\n", metric.name, metric.help)
+		_, _ = fmt.Fprintf(writer, "# TYPE %s %s\n", metric.name, metric.typ)
+		_, _ = fmt.Fprintf(writer, "%s{transport=\"tcp\"} %s\n", metric.name, metric.value(stats.TCP))
+		_, _ = fmt.Fprintf(writer, "%s{transport=\"websocket\"} %s\n", metric.name, metric.value(stats.WebSocket))
+	}
+}
+
+func prometheusUint64(get func(TransportStats) uint64) func(TransportStats) string {
+	return func(stats TransportStats) string {
+		return strconv.FormatUint(get(stats), 10)
+	}
+}
+
+func prometheusDurationSeconds(get func(TransportStats) time.Duration) func(TransportStats) string {
+	return func(stats TransportStats) string {
+		return strconv.FormatFloat(get(stats).Seconds(), 'f', -1, 64)
 	}
 }

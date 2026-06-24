@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -87,6 +88,55 @@ func TestStatsJSONHandlerHeadOmitsBody(t *testing.T) {
 	}
 }
 
+func TestStatsPrometheusHandlerExportsMetrics(t *testing.T) {
+	server := newStatsExportServer(t)
+	seedStatsExportMetrics(server)
+
+	recorder := httptest.NewRecorder()
+	StatsPrometheusHandler(server).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	assertContentType(t, recorder, "text/plain; version=0.0.4; charset=utf-8")
+
+	body := recorder.Body.String()
+	assertPrometheusFamilyOrder(t, body, wantPrometheusFamilies())
+	assertPrometheusContains(t, body, "# TYPE ramix_active_connections gauge")
+	assertPrometheusContains(t, body, `ramix_active_connections{transport="tcp"} 2`)
+	assertPrometheusContains(t, body, `ramix_active_connections{transport="websocket"} 1`)
+	assertPrometheusContains(t, body, "# TYPE ramix_queued_tasks gauge")
+	assertPrometheusContains(t, body, `ramix_queued_tasks{transport="tcp"} 1`)
+	assertPrometheusContains(t, body, "# TYPE ramix_received_messages_total counter")
+	assertPrometheusContains(t, body, `ramix_received_messages_total{transport="tcp"} 1`)
+	assertPrometheusContains(t, body, `ramix_received_bytes_total{transport="websocket"} 32`)
+	assertPrometheusContains(t, body, `ramix_sent_bytes_total{transport="tcp"} 64`)
+	assertPrometheusContains(t, body, `ramix_rejected_tasks_total{transport="tcp"} 1`)
+	assertPrometheusContains(t, body, `ramix_connection_errors_total{transport="tcp"} 1`)
+	assertPrometheusContains(t, body, `ramix_completed_requests_total{transport="websocket"} 1`)
+	assertPrometheusContains(t, body, `ramix_request_duration_seconds_total{transport="tcp"} 1.5`)
+	assertPrometheusContains(t, body, `ramix_request_duration_seconds_max{transport="websocket"} 0.25`)
+	if strings.Contains(body, `transport="total"`) {
+		t.Fatalf("Prometheus output contains transport total series:\n%s", body)
+	}
+}
+
+func TestStatsPrometheusHandlerHeadOmitsBody(t *testing.T) {
+	server := newStatsExportServer(t)
+	seedStatsExportMetrics(server)
+
+	recorder := httptest.NewRecorder()
+	StatsPrometheusHandler(server).ServeHTTP(recorder, httptest.NewRequest(http.MethodHead, "/metrics", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	assertContentType(t, recorder, "text/plain; version=0.0.4; charset=utf-8")
+	if got := recorder.Body.String(); got != "" {
+		t.Fatalf("HEAD body = %q, want empty", got)
+	}
+}
+
 func newStatsExportServer(t *testing.T) *Server {
 	t.Helper()
 
@@ -126,6 +176,47 @@ func assertJSONTransportStats(t *testing.T, got, want map[string]uint64) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("JSON transport stats = %+v, want %+v", got, want)
+	}
+}
+
+func assertPrometheusContains(t *testing.T, body, want string) {
+	t.Helper()
+
+	if !strings.Contains(body, want) {
+		t.Fatalf("Prometheus output missing %q:\n%s", want, body)
+	}
+}
+
+func assertPrometheusFamilyOrder(t *testing.T, body string, families []string) {
+	t.Helper()
+
+	previous := -1
+	for _, family := range families {
+		marker := "# HELP " + family + " "
+		index := strings.Index(body, marker)
+		if index == -1 {
+			t.Fatalf("Prometheus output missing family %q:\n%s", family, body)
+		}
+		if index < previous {
+			t.Fatalf("Prometheus family %q appears out of order:\n%s", family, body)
+		}
+		previous = index
+	}
+}
+
+func wantPrometheusFamilies() []string {
+	return []string{
+		"ramix_active_connections",
+		"ramix_queued_tasks",
+		"ramix_received_messages_total",
+		"ramix_received_bytes_total",
+		"ramix_sent_messages_total",
+		"ramix_sent_bytes_total",
+		"ramix_rejected_tasks_total",
+		"ramix_connection_errors_total",
+		"ramix_completed_requests_total",
+		"ramix_request_duration_seconds_total",
+		"ramix_request_duration_seconds_max",
 	}
 }
 
