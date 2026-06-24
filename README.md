@@ -118,6 +118,22 @@ log.Printf("connections=%d received=%d sent=%d queued=%d rejected=%d",
 
 Counters accumulate from server construction and remain readable after shutdown. Each field is atomically loaded, but the snapshot is not transactionally consistent across fields. Received and sent byte values count message bodies and exclude Ramix and transport headers.
 
+## Exporting Statistics
+
+Ramix provides standard-library HTTP handlers for exposing `server.Stats()`:
+
+```go
+adminMux := http.NewServeMux()
+adminMux.Handle("/stats", ramix.StatsJSONHandler(server))
+adminMux.Handle("/metrics", ramix.StatsPrometheusHandler(server))
+
+go func() {
+	_ = http.ListenAndServe(":9090", adminMux)
+}()
+```
+
+`/stats` returns JSON with `total`, `tcp`, and `websocket` snapshots. `/metrics` returns Prometheus text exposition with per-transport samples. Ramix only provides the handlers; applications own the admin server, authentication, and shutdown.
+
 ## Worker Pool
 
 Ramix owns a fixed internal worker pool. Configure it at construction time with `WithWorkerCount` and `WithWorkerQueueCapacity`. Tasks from one connection remain ordered, while different connections can run concurrently.
